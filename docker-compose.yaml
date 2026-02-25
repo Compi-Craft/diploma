@@ -1,0 +1,129 @@
+services:
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg14
+    container_name: lpa-timescaledb
+    restart: always
+    networks:
+      - internal-network
+    environment:
+      - POSTGRES_PASSWORD=lpa_password
+      - POSTGRES_DB=lpa_database
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin
+    restart: always
+    networks:
+      - internal-network
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+
+  timescale_api:
+    build:
+      context: ./app
+    restart: always
+    container_name: timescale_api
+    networks:
+      - internal-network
+    command: ["python", "-u", "timescale_api/run.py"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 10s
+      retries: 5
+      timeout: 5s
+      start_period: 5s
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+    volumes:
+      - ./app:/app 
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+
+  # ============================================
+  # Monitoring Stack: Loki + Promtail + Grafana
+  # ============================================
+  
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: loki
+    restart: unless-stopped
+    user: "0"  # Запускаємо як root для доступу до /tmp/loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./configs/loki-config.yml:/etc/loki/local-config.yaml
+      - loki_data:/tmp/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - internal-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3100/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  promtail:
+    image: grafana/promtail:2.9.0
+    container_name: promtail
+    restart: unless-stopped
+    volumes:
+      - ./configs/promtail-config.yml:/etc/promtail/config.yml
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - internal-network
+    depends_on:
+      - loki
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_INSTALL_PLUGINS=
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./configs/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+    networks:
+      - internal-network
+    depends_on:
+      - loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  internal-network:
+
+volumes:
+  timescaledb_data:
+  pgadmin-data:
+  loki_data:
+  grafana_data:

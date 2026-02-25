@@ -1,0 +1,56 @@
+server:
+  http_listen_port: 9080        # Web-інтерфейс Promtail (метрики, статус)
+  grpc_listen_port: 0           # Вимкнено gRPC (якщо не потрібно)
+
+positions:
+  filename: /tmp/positions.yaml # Зберігає позиції у файлах логів, щоб не дублювати дані після рестарту
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push  # Адреса Loki (залежно від docker-compose)
+    batchwait: 1s
+    batchsize: 1048576
+
+scrape_configs:
+  # --- ЛОГИ DOCKER-КОНТЕЙНЕРІВ ---
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: 'container'
+      - source_labels: ['__meta_docker_container_log_stream']
+        target_label: 'stream'
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: 'service'
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: 'project'
+      - replacement: 'docker'
+        target_label: 'job'
+
+    pipeline_stages:
+      # --- 1. Парсинг JSON логів ---
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            message: message
+            service: service
+
+      # --- 2. Резервний regex для звичайних логів ---
+      - regex:
+          expression: '^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \| (?P<logger>[\w\-]+)\s+\| (?P<level>\w+)\s+\| (?P<message>.*)$'
+
+      # --- 3. Додавання лейблів ---
+      - labels:
+          level:
+          service:
+          container:
+          stream:
+
+      # --- 4. Форматування часу ---
+      - timestamp:
+          source: timestamp
+          format: '2006-01-02 15:04:05'
+

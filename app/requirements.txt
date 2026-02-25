@@ -1,0 +1,12 @@
+requests
+httpx
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+sqlalchemy
+asyncpg
+tensorflow-cpu
+pandas
+numpy
+prometheus-api-client
