@@ -10,3 +10,4 @@ tensorflow-cpu
 pandas
 numpy
 prometheus-api-client
+locust

@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podinfo
+  labels:
+    app: podinfo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: podinfo
+  template:
+    metadata:
+      labels:
+        app: podinfo
+    spec:
+      containers:
+      - name: podinfo
+        image: stefanprodan/podinfo
+        ports:
+        - containerPort: 9898
+          name: http
+        resources:
+          requests:
+            cpu: 100m
+            memory: 32Mi
+          limits:
+            cpu: 500m
+            memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: podinfo
+  labels:
+    app: podinfo
+spec:
+  ports:
+  - port: 9898
+    targetPort: http
+    name: http
+  selector:
+    app: podinfo
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: podinfo-monitor
+  labels:
+    release: prometheus # Це ключовий лейбл! Без нього Prometheus ігноруватиме цей монітор.
+spec:
+  selector:
+    matchLabels:
+      app: podinfo
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 10s

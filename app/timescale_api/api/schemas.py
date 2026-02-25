@@ -20,3 +20,13 @@ class MetricRead(MetricBase):
     
     # Дозволяє Pydantic працювати з об'єктами SQLAlchemy
     model_config = ConfigDict(from_attributes=True)
+
+class SyncActualData(BaseModel):
+    resource: str
+    actual_value: float
+
+class PredictData(BaseModel):
+    resource: str
+    input_value: float
+    predicted_value: float
+    horizon_seconds: int = 60
