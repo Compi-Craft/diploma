@@ -11,3 +11,6 @@ pandas
 numpy
 prometheus-api-client
 locust
+joblib
+scikit-learn
+prometheus-client

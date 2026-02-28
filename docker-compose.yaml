@@ -64,16 +64,39 @@ services:
     container_name: collector
     networks:
       - internal-network
+    ports:
+        - "8001:8001"
     command: ["python", "-u", "-m", "collector.worker"]
     volumes:
       - ./app:/app 
     extra_hosts:
           - "host.docker.internal:host-gateway"
-    environment:
-      - PROMETHEUS_URL=http://host.docker.internal:9090
     depends_on:
       timescale_api:
         condition: service_healthy
+      lstm-predictor:
+        condition: service_healthy
+
+  lstm-predictor:
+    build:
+      context: ./app
+    restart: always
+    container_name: lstm-predictor
+    ports:
+        - "6000:6000"
+    networks:
+      - internal-network
+    command: ["python", "-u", "lstm_module/main.py"]
+    environment:
+      - PORT=6000
+    volumes:
+      - ./app:/app 
+    healthcheck:
+          test: ["CMD", "curl", "-f", "http://localhost:6000/status"]
+          interval: 10s
+          retries: 5
+          timeout: 5s
+          start_period: 15s
 
   # ============================================
   # Monitoring Stack: Loki + Promtail + Grafana
