@@ -15,5 +15,4 @@ COPY . .
 # Змінні оточення
 ENV PYTHONPATH=/app
 ENV API_URL="http://timescale_api:5000"
-ENV PROMETHEUS_URL="http://host.docker.internal:9090"
 ENV PREDICTOR_URL="http://lstm-predictor:6000"

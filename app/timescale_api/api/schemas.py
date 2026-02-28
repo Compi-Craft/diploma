@@ -30,3 +30,33 @@ class PredictData(BaseModel):
     input_value: float
     predicted_value: float
     horizon_seconds: int = 60
+
+class ModelCreate(BaseModel):
+    version: str
+    mse: Optional[float] = None
+    mae: Optional[float] = None
+    model_path: str
+    scaler_path: str
+    is_active: bool = False
+    is_autotune_candidate: bool = True
+
+class ModelRead(ModelCreate):
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class SettingsUpdate(BaseModel):
+    is_collector_active: bool
+    collection_interval_sec: int
+    prometheus_url: str
+    target_endpoint_name: str
+    cpu_query: str
+    ram_query: str
+    rps_query: str
+
+class SettingsRead(SettingsUpdate):
+    id: int
+
+    class Config:
+        from_attributes = True

@@ -33,8 +33,8 @@ class ModelManager:
     def load_new_model(self, model_path: str, scaler_path: str, version: str):
         """Гаряча заміна моделі та скейлера (Hot Swap)"""
         try:
-            # Завантажуємо в тимчасові змінні
-            new_model = tf.keras.models.load_model(model_path)
+            # ДОДАЛИ compile=False ось тут 👇
+            new_model = tf.keras.models.load_model(model_path, compile=False)
             new_scaler = joblib.load(scaler_path)
             
             # Атомарна заміна під локом

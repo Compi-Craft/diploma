@@ -14,3 +14,4 @@ locust
 joblib
 scikit-learn
 prometheus-client
+python-multipart

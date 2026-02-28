@@ -1,11 +1,10 @@
 import httpx
 from ..config import settings
 
-async def fetch_metric(query: str) -> float | None:
-    url = f"{settings.PROMETHEUS_URL}/api/v1/query"
+async def fetch_metric(query: str, prom_url: str) -> float | None:
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, params={"query": query}, timeout=5.0)
+            response = await client.get(prom_url, params={"query": query}, timeout=5.0)
             if response.status_code == 200:
                 data = response.json()
                 results = data.get("data", {}).get("result", [])

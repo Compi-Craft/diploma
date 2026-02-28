@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from sqlalchemy import text
 from api.database import engine, Base
-from .routes import metrics
+from .routes import metrics, model, settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("TimescaleAPI")
@@ -33,6 +33,8 @@ app = FastAPI(
 
 # Підключення модульних роутів
 app.include_router(metrics.router)
+app.include_router(model.router)
+app.include_router(settings.router)
 
 @app.get("/health")
 async def health():

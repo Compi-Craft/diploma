@@ -31,3 +31,11 @@ async def save_new_prediction(resource: str, val: float, pred: float):
             response.raise_for_status()
     except Exception as e:
         print(f"⚠️ Помилка збереження прогнозу в API: {e}")
+
+async def get_system_settings():
+    async with httpx.AsyncClient() as client:
+        # Підстав свій URL до FastAPI
+        response = await client.get(f"{settings.API_URL}/settings", timeout=5.0)
+        if response.status_code == 200:
+            return response.json()
+        raise Exception(f"HTTP {response.status_code}")
