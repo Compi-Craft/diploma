@@ -1,42 +1,49 @@
-import os
 import threading
+from typing import Any
+
 import joblib
 import numpy as np
 import tensorflow as tf
-from sklearn.preprocessing import StandardScaler
 from core.config import settings
+from sklearn.preprocessing import StandardScaler
+
 
 class ModelManager:
-    def __init__(self):
+    def __init__(self) -> None:
         # Ініціалізуємо "пустишки"
         self.scaler = self._create_dummy_scaler()
         self.model = self._create_dummy_model()
         self.version = "v0-dummy"
         self._lock = threading.Lock()
 
-    def _create_dummy_scaler(self):
+    def _create_dummy_scaler(self) -> StandardScaler:
         """Створює пустий скейлер, щоб API не падало до завантаження реальної моделі"""
         scaler = StandardScaler()
         # Фіктивно "навчаємо" його на нулях та одиницях, щоб він просто пропускав дані
         scaler.fit([[0, 0, 0], [1, 1, 1]])
         return scaler
 
-    def _create_dummy_model(self):
+    def _create_dummy_model(self) -> Any:
         """Створює пусту LSTM модель для старту"""
-        model = tf.keras.Sequential([
-            tf.keras.layers.LSTM(16, input_shape=(settings.MODEL_INPUT_STEPS, settings.MODEL_FEATURES)),
-            tf.keras.layers.Dense(settings.MODEL_FEATURES)
-        ])
-        model.compile(optimizer='adam', loss='mse')
+        model = tf.keras.Sequential(
+            [
+                tf.keras.layers.LSTM(
+                    16,
+                    input_shape=(settings.MODEL_INPUT_STEPS, settings.MODEL_FEATURES),
+                ),
+                tf.keras.layers.Dense(settings.MODEL_FEATURES),
+            ]
+        )
+        model.compile(optimizer="adam", loss="mse")
         return model
 
-    def load_new_model(self, model_path: str, scaler_path: str, version: str):
+    def load_new_model(self, model_path: str, scaler_path: str, version: str) -> None:
         """Гаряча заміна моделі та скейлера (Hot Swap)"""
         try:
             # ДОДАЛИ compile=False ось тут 👇
             new_model = tf.keras.models.load_model(model_path, compile=False)
             new_scaler = joblib.load(scaler_path)
-            
+
             # Атомарна заміна під локом
             with self._lock:
                 self.model = new_model
@@ -55,20 +62,23 @@ class ModelManager:
         with self._lock:
             # 1. Витягуємо наші 10 точок у 2D масив: форма стає (10, 3)
             flat_data = data[0]
-            
+
             # 2. Нормалізуємо вхідні дані
             scaled_flat_data = self.scaler.transform(flat_data)
-            
+
             # 3. Повертаємо у 3D форму для LSTM: (1, 10, 3)
             scaled_data = np.array([scaled_flat_data])
-            
+
             # 4. Робимо прогноз (результат буде мати форму (1, 3))
             prediction_scaled = self.model.predict(scaled_data, verbose=0)
-            
+
             # 5. Робимо зворотне перетворення (Inverse Transform) у реальні значення
-            prediction_real = self.scaler.inverse_transform(prediction_scaled)
-            
+            prediction_real: np.ndarray = np.array(
+                self.scaler.inverse_transform(prediction_scaled)
+            )
+
             return prediction_real
+
 
 # Створюємо єдиний екземпляр
 model_manager = ModelManager()

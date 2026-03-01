@@ -1,18 +1,20 @@
-from locust import HttpUser, task, between, LoadTestShape
 import math
 import random
+
+from locust import HttpUser, LoadTestShape, between, task
+
 
 class ChaosUser(HttpUser):
     # Різна інтенсивність "кліків" для різних користувачів
     wait_time = between(0.05, 0.5)
 
     @task(10)
-    def standard_request(self):
+    def standard_request(self) -> None:
         """Звичайний трафік на головну"""
         self.client.get("/")
 
     @task(3)
-    def memory_heavy_task(self):
+    def memory_heavy_task(self) -> None:
         """Імітація важкої обробки даних (високий RAM та CPU)"""
         # Генеруємо випадковий розмір "пакета" від 1 до 50 КБ
         payload_size = random.randint(1000, 50000)
@@ -20,10 +22,11 @@ class ChaosUser(HttpUser):
         self.client.post("/echo", json=payload)
 
     @task(1)
-    def error_prone_task(self):
+    def error_prone_task(self) -> None:
         """Імітація помилок або довгих відповідей (таймаути)"""
         # podinfo має ендпоінт /delay/{seconds}
         self.client.get("/delay/2", name="/delay")
+
 
 class LongTermChaosShape(LoadTestShape):
     """
@@ -34,10 +37,10 @@ class LongTermChaosShape(LoadTestShape):
     4. Fractal Noise (3.5-6 год): Хаотичні хвилі.
     5. Night Mode (6-8 год): Майже нуль запитів.
     """
-    
-    def tick(self):
+
+    def tick(self) -> tuple[int, int] | None:
         run_time = self.get_run_time()
-        
+
         # 1. Ранок: Плавний підйом (20 -> 400 юзерів)
         if run_time < 3600:
             users = 20 + (run_time / 3600) * 380
@@ -51,9 +54,9 @@ class LongTermChaosShape(LoadTestShape):
 
         # 3. Flash Crowd: Сплеск до 1500 за 5 хвилин і спад
         elif run_time < 12600:
-            if run_time < 11700: # Ріст
+            if run_time < 11700:  # Ріст
                 users = 400 + ((run_time - 10800) / 900) * 1100
-            else: # Спад
+            else:  # Спад
                 users = 1500 - ((run_time - 11700) / 900) * 1100
             return (int(users), 15)
 

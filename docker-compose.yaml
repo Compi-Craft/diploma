@@ -97,6 +97,9 @@ services:
           retries: 5
           timeout: 5s
           start_period: 15s
+    depends_on:
+      timescale_api:
+        condition: service_healthy
 
   # ============================================
   # Monitoring Stack: Loki + Promtail + Grafana

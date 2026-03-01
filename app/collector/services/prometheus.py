@@ -1,5 +1,7 @@
 import httpx
+
 from ..config import settings
+
 
 async def fetch_metric(query: str, prom_url: str) -> float | None:
     try:

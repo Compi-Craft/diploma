@@ -1,41 +1,44 @@
-from locust import HttpUser, task, between, LoadTestShape
 import math
 import random
+
+from locust import HttpUser, LoadTestShape, between, task
+
 
 class WebsiteUser(HttpUser):
     # 1. Зменшуємо час очікування! Тепер юзери "клікають" як божевільні
     wait_time = between(0.01, 0.1)
 
-    @task(3) # Вага 3: 75% часу робимо звичайний швидкий GET
-    def access_endpoint(self):
+    @task(3)  # Вага 3: 75% часу робимо звичайний швидкий GET
+    def access_endpoint(self) -> None:
         self.client.get("/")
 
-    @task(1) # Вага 1: 25% часу вантажимо процесор парсингом JSON
-    def heavy_post_request(self):
+    @task(1)  # Вага 1: 25% часу вантажимо процесор парсингом JSON
+    def heavy_post_request(self) -> None:
         # Генеруємо "сміттєвий" payload на ~5 КБ, щоб змусити podinfo витрачати CPU
         payload = {
             "user_id": random.randint(1, 10000),
-            "data": "A" * 5000, 
-            "status": "testing"
+            "data": "A" * 5000,
+            "status": "testing",
         }
         # podinfo підтримує /echo - він парсить JSON і віддає його назад
         self.client.post("/echo", json=payload)
+
 
 class DiplomaLoadShape(LoadTestShape):
     """
     Агресивний сценарій навантаження
     """
-    
+
     stages = [
         # Збільшуємо кількість користувачів та швидкість їх появи
-        {"duration": 300, "users": 50, "spawn_rate": 5},    # База
+        {"duration": 300, "users": 50, "spawn_rate": 5},  # База
         {"duration": 900, "users": 800, "spawn_rate": 10},  # Агресивний ріст до стресу
-        {"duration": 1500, "users": 800, "spawn_rate": 10}, # Утримання піку
-        {"duration": 2400, "users": 300, "spawn_rate": 10}, # Спад та хвилі
-        {"duration": 3000, "users": 20, "spawn_rate": 5}    # Охолодження
+        {"duration": 1500, "users": 800, "spawn_rate": 10},  # Утримання піку
+        {"duration": 2400, "users": 300, "spawn_rate": 10},  # Спад та хвилі
+        {"duration": 3000, "users": 20, "spawn_rate": 5},  # Охолодження
     ]
 
-    def tick(self):
+    def tick(self) -> tuple[int, int] | None:
         run_time = self.get_run_time()
 
         for stage in self.stages:
@@ -46,7 +49,7 @@ class DiplomaLoadShape(LoadTestShape):
                     tick_users = stage["users"] + int(variation)
                 else:
                     tick_users = stage["users"]
-                
+
                 return (tick_users, stage["spawn_rate"])
 
         return None
