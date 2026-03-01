@@ -16,3 +16,6 @@ scikit-learn
 prometheus-client
 python-multipart
 aiohttp
+streamlit
+streamlit-autorefresh
+plotly

@@ -57,6 +57,32 @@ services:
       timescaledb:
         condition: service_healthy
 
+  dashboard:
+    build:
+      context: ./app
+    restart: always
+    container_name: lpa-dashboard
+    networks:
+      - internal-network
+    ports:
+      - "8501:8501"
+    command: ["streamlit", "run", "dashboard/app.py", \
+     "--server.address=0.0.0.0", \
+     "--server.port=8501", \
+     "--server.headless=true", \
+     "--server.enableCORS=false"]
+    depends_on:
+      timescale_api:
+        condition: service_healthy
+      lstm-predictor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 15s
+      retries: 3
+      timeout: 5s
+      start_period: 20s
+
   collector:
     build:
       context: ./app

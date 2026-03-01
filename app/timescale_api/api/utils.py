@@ -9,10 +9,10 @@ async def notify_predictor_to_reload(version: str, model_path: str, scaler_path:
     """Фонова задача: надсилає POST-запит до мікросервісу Предиктора"""
     try:
         async with aiohttp.ClientSession() as session:
-            # Формуємо URL з query-параметрами, як очікує Предиктор
-            url = f"{PREDICTOR_URL}/reload?version={version}&model_path={model_path}&scaler_path={scaler_path}"
+            url = f"{PREDICTOR_URL}/reload"
+            payload = {"version": version, "model_path": model_path, "scaler_path": scaler_path}
 
-            async with session.post(url) as response:
+            async with session.post(url, json=payload) as response:
                 if response.status == 200:
                     print(
                         f"✅ Предиктор успішно отримав команду на Hot Swap до {version}"

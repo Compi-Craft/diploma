@@ -58,6 +58,7 @@ async def save_new_prediction(data: PredictData, db: AsyncSession = Depends(get_
     # 3. Зберігаємо запис із прив'язкою до версії моделі
     new_entry = MetricEntry(
         resource=data.resource,
+        ts = current_time,
         input_value=data.input_value,
         predicted_value=data.predicted_value,
         target_ts=target_time,
