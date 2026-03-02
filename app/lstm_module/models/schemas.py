@@ -28,9 +28,10 @@ class ReloadRequest(BaseModel):
     model_path: str
     scaler_path: str
 
+
 class RetrainCommand(BaseModel):
     target_version: str
-    start_time: str # ISO формат (напр. 2026-03-01T10:00:00Z)
+    start_time: str  # ISO формат (напр. 2026-03-01T10:00:00Z)
     end_time: str
     epochs: int = 5
     batch_size: int = 16

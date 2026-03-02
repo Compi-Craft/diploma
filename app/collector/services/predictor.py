@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional, cast
-from logger.logger import send_system_log
+
 import httpx
+from logger.logger import send_system_log
 
 from ..config import settings
 
@@ -28,12 +29,22 @@ async def get_prediction(history: List[Dict[str, float]]) -> Optional[Dict[str, 
                 return cast(Optional[Dict[str, float]], data.get("predicted_values"))
             else:
                 # Якщо FastAPI повернув 400 (наприклад, не вистачає точок) або 500
-                await send_system_log(f"⚠️ Predictor API Error {response.status_code}: {response.text}", level="ERROR", service="collector")
+                await send_system_log(
+                    f"⚠️ Predictor API Error {response.status_code}: {response.text}",
+                    level="ERROR",
+                    service="collector",
+                )
 
     except httpx.RequestError as e:
-        await send_system_log(f"⚠️ Predictor Connection Error: Неможливо підключитися до сервісу ({e})", level="ERROR", service="collector")
+        await send_system_log(
+            f"⚠️ Predictor Connection Error: Неможливо підключитися до сервісу ({e})",
+            level="ERROR",
+            service="collector",
+        )
     except Exception as e:
-        await send_system_log(f"⚠️ Predictor Unexpected Error: {e}", level="ERROR", service="collector")
+        await send_system_log(
+            f"⚠️ Predictor Unexpected Error: {e}", level="ERROR", service="collector"
+        )
 
     # Замість "наївного" прогнозу, тепер краще повернути None.
     # Воркер зрозуміє це і просто не буде записувати "сміття" в базу для цього циклу.

@@ -1,3 +1,5 @@
+from typing import Any
+
 import numpy as np
 from core.config import settings
 from fastapi import APIRouter, BackgroundTasks, HTTPException
@@ -6,11 +8,11 @@ from models.schemas import (
     PredictionRequest,
     PredictionResponse,
     ReloadRequest,
-    StatusResponse,
     RetrainCommand,
+    StatusResponse,
 )
-from services.utils import run_finetune_pipeline
 from services.model_manager import model_manager
+from services.utils import run_finetune_pipeline
 
 router = APIRouter()
 
@@ -40,9 +42,14 @@ async def predict(request: PredictionRequest) -> PredictionResponse:
 
 
 @router.post("/reload")
-async def reload_model(request: ReloadRequest, background_tasks: BackgroundTasks) -> dict[str, str]:
+async def reload_model(
+    request: ReloadRequest, background_tasks: BackgroundTasks
+) -> dict[str, str]:
     background_tasks.add_task(
-        model_manager.load_new_model, request.model_path, request.scaler_path, request.version
+        model_manager.load_new_model,
+        request.model_path,
+        request.scaler_path,
+        request.version,
     )
     return {"message": f"Reloading started for {request.version}"}
 
@@ -51,8 +58,13 @@ async def reload_model(request: ReloadRequest, background_tasks: BackgroundTasks
 async def status() -> StatusResponse:
     return StatusResponse(current_version=model_manager.version, status="active")
 
+
 @router.post("/retrain")
-async def trigger_retraining(cmd: RetrainCommand, background_tasks: BackgroundTasks):
+async def trigger_retraining(
+    cmd: RetrainCommand, background_tasks: BackgroundTasks
+) -> Any:
     """Ендпоінт, який викликає Streamlit Дашборд."""
     background_tasks.add_task(run_finetune_pipeline, cmd)
-    return {"message": f"Процес донавчання моделі {cmd.target_version} запущено у фоні."}
+    return {
+        "message": f"Процес донавчання моделі {cmd.target_version} запущено у фоні."
+    }

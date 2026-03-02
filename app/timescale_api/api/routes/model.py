@@ -30,8 +30,9 @@ async def get_all_models(db: AsyncSession = Depends(get_db)) -> Sequence[ModelRe
     result = await db.execute(query)
     return result.scalars().all()
 
+
 @router.get("/byversion/{version}", response_model=ModelRead)
-async def get_specific_model(version: str, db: AsyncSession = Depends(get_db)):
+async def get_specific_model(version: str, db: AsyncSession = Depends(get_db)) -> Any:
     """Отримує метадані конкретної моделі (шляхи до файлів)."""
     query = select(ModelRegistry).filter(ModelRegistry.version == version)
     result = await db.execute(query)
@@ -40,8 +41,11 @@ async def get_specific_model(version: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Модель не знайдено")
     return model
 
+
 @router.post("", response_model=ModelRead)
-async def publish_model(model_in: ModelCreate, db: AsyncSession = Depends(get_db)) -> ModelRead:
+async def publish_model(
+    model_in: ModelCreate, db: AsyncSession = Depends(get_db)
+) -> ModelRead:
     """Реєстрація нової моделі після донавчання."""
 
     # Перевіряємо, чи існує така версія

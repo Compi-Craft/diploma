@@ -1,5 +1,5 @@
 import datetime
-from typing import List, Sequence
+from typing import Any, List, Sequence
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import update
@@ -14,7 +14,9 @@ router = APIRouter(prefix="/metrics", tags=["metrics"])
 
 
 @router.put("/sync")
-async def sync_actual_values(data: SyncActualData, db: AsyncSession = Depends(get_db)) -> dict[str, str]:
+async def sync_actual_values(
+    data: SyncActualData, db: AsyncSession = Depends(get_db)
+) -> dict[str, str]:
     """
     [Internal] Оновлює actual_value для минулих прогнозів, час яких настав.
     Викликається Воркером.
@@ -35,7 +37,9 @@ async def sync_actual_values(data: SyncActualData, db: AsyncSession = Depends(ge
 
 
 @router.post("/predict", response_model=MetricRead)
-async def save_new_prediction(data: PredictData, db: AsyncSession = Depends(get_db)) -> MetricRead:
+async def save_new_prediction(
+    data: PredictData, db: AsyncSession = Depends(get_db)
+) -> MetricRead:
     """
     [Internal] Зберігає новий прогноз від LSTM сервісу.
     Викликається Воркером.
@@ -58,7 +62,7 @@ async def save_new_prediction(data: PredictData, db: AsyncSession = Depends(get_
     # 3. Зберігаємо запис із прив'язкою до версії моделі
     new_entry = MetricEntry(
         resource=data.resource,
-        ts = current_time,
+        ts=current_time,
         input_value=data.input_value,
         predicted_value=data.predicted_value,
         target_ts=target_time,
@@ -87,15 +91,17 @@ async def get_history(
     result = await db.execute(query)
     return result.scalars().all()
 
+
 from typing import Optional
+
 
 @router.get("/history/range")
 async def get_history_by_range(
-    start_time: datetime.datetime, 
+    start_time: datetime.datetime,
     end_time: datetime.datetime,
-    resource: Optional[str] = None, # Зробили опціональним
-    db: AsyncSession = Depends(get_db)
-):
+    resource: Optional[str] = None,  # Зробили опціональним
+    db: AsyncSession = Depends(get_db),
+) -> Any:
     query = (
         select(MetricEntry)
         .filter(MetricEntry.actual_value.isnot(None))
@@ -105,8 +111,6 @@ async def get_history_by_range(
     )
     if resource:
         query = query.filter(MetricEntry.resource == resource)
-        
+
     result = await db.execute(query)
     return result.scalars().all()
-
-

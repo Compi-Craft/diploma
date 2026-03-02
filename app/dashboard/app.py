@@ -1,7 +1,8 @@
+import datetime
 import os
 import time
 from typing import Any, Optional
-import datetime
+
 import pandas as pd
 import plotly.graph_objects as go
 import requests
@@ -183,7 +184,9 @@ elif page == "🗂️ Model Registry":
         )
         df["mse"] = df["mse"].apply(lambda x: f"{x:.6f}" if x is not None else "—")
         df["mae"] = df["mae"].apply(lambda x: f"{x:.6f}" if x is not None else "—")
-        df["status"] = df["is_active"].apply(lambda x: "✅ Active" if x else "⬜ Inactive")
+        df["status"] = df["is_active"].apply(
+            lambda x: "✅ Active" if x else "⬜ Inactive"
+        )
 
         display_cols = ["version", "status", "mse", "mae", "created_at"]
         st.dataframe(
@@ -208,10 +211,16 @@ elif page == "🗂️ Model Registry":
             st.subheader("🟢 Currently Active Model")
             col1, col2, col3 = st.columns(3)
             col1.metric("Version", active["version"])
-            col2.metric("MSE", f"{active['mse']:.6f}" if active.get("mse") is not None else "—")
-            col3.metric("MAE", f"{active['mae']:.6f}" if active.get("mae") is not None else "—")
+            col2.metric(
+                "MSE", f"{active['mse']:.6f}" if active.get("mse") is not None else "—"
+            )
+            col3.metric(
+                "MAE", f"{active['mae']:.6f}" if active.get("mae") is not None else "—"
+            )
             with st.expander("File paths"):
-                st.code(f"Model:  {active['model_path']}\nScaler: {active['scaler_path']}")
+                st.code(
+                    f"Model:  {active['model_path']}\nScaler: {active['scaler_path']}"
+                )
 
         # Activate a different model
         st.divider()
@@ -232,14 +241,14 @@ elif page == "🗂️ Model Registry":
                 "Select version to activate or force-reload",
                 all_versions,
                 index=active_index,
-                help="Select any model to activate it. Selecting the currently active model will force the Predictor to reload its files."
+                help="Select any model to activate it. Selecting the currently active model will force the Predictor to reload its files.",
             )
-            
+
             if st.button(f"✅ Activate / Reload **{selected}**", type="primary"):
                 with st.spinner(f"Sending reload signal for {selected}..."):
                     # Звертаємося до нашого API
                     result = api_put(f"/models/{selected}/activate")
-                    
+
                 if result:
                     st.success(result.get("message", f"Model {selected} activated."))
                     time.sleep(1)
@@ -255,16 +264,20 @@ elif page == "🗂️ Model Registry":
         with col_ft1:
             tune_version = st.selectbox(
                 "Base Model Version",
-                all_versions, # Тут можна вибирати будь-яку модель, навіть активну
-                help="Обери модель, ваги якої будуть використані як базові."
+                all_versions,  # Тут можна вибирати будь-яку модель, навіть активну
+                help="Обери модель, ваги якої будуть використані як базові.",
             )
 
         with col_ft2:
-            epochs = st.number_input("Epochs", min_value=1, max_value=100, value=5, step=1)
-            batch_size = st.number_input("Batch Size", min_value=1, max_value=256, value=16, step=1)
+            epochs = st.number_input(
+                "Epochs", min_value=1, max_value=100, value=5, step=1
+            )
+            batch_size = st.number_input(
+                "Batch Size", min_value=1, max_value=256, value=16, step=1
+            )
 
         st.write("📅 **Select Data Range**")
-        
+
         # Дефолтні значення: від вчорашнього дня до зараз
         now = datetime.datetime.now()
         yesterday = now - datetime.timedelta(days=1)
@@ -281,7 +294,9 @@ elif page == "🗂️ Model Registry":
 
         if st.button("🚀 Start Fine-Tuning", type="secondary"):
             # Збираємо дату та час у ISO-формат (наприклад, 2026-03-01T10:00:00Z)
-            start_dt = datetime.datetime.combine(start_date, start_time).isoformat() + "Z"
+            start_dt = (
+                datetime.datetime.combine(start_date, start_time).isoformat() + "Z"
+            )
             end_dt = datetime.datetime.combine(end_date, end_time).isoformat() + "Z"
 
             payload = {
@@ -289,7 +304,7 @@ elif page == "🗂️ Model Registry":
                 "start_time": start_dt,
                 "end_time": end_dt,
                 "epochs": epochs,
-                "batch_size": batch_size
+                "batch_size": batch_size,
             }
 
             with st.spinner(f"Initiating fine-tuning for {tune_version}..."):
@@ -297,9 +312,11 @@ elif page == "🗂️ Model Registry":
                     # УВАГА: Streamlit має стукати безпосередньо у контейнер Предиктора.
                     # Перевір, чи правильний тут URL для твоєї Docker-мережі.
                     response = requests.post(f"{PREDICTOR_URL}/retrain", json=payload)
-                    
+
                     if response.status_code == 200:
-                        st.success("✅ Процес донавчання запущено у фоні! Нова модель з'явиться в таблиці після завершення (натисни Refresh за кілька хвилин).")
+                        st.success(
+                            "✅ Процес донавчання запущено у фоні! Нова модель з'явиться в таблиці після завершення (натисни Refresh за кілька хвилин)."
+                        )
                     else:
                         st.error(f"❌ Помилка: {response.text}")
                 except requests.exceptions.RequestException as e:
@@ -335,7 +352,9 @@ elif page == "📤 Upload Model":
             help="scikit-learn scaler exported with joblib.dump()",
         )
 
-        submitted = st.form_submit_button("📤 Upload", type="primary", use_container_width=True)
+        submitted = st.form_submit_button(
+            "📤 Upload", type="primary", use_container_width=True
+        )
 
     if submitted:
         if not model_file or not scaler_file:
@@ -406,7 +425,9 @@ elif page == "⚙️ Settings":
                 height=90,
             )
 
-            saved = st.form_submit_button("💾 Save Settings", type="primary", use_container_width=True)
+            saved = st.form_submit_button(
+                "💾 Save Settings", type="primary", use_container_width=True
+            )
 
         if saved:
             payload = {
@@ -432,17 +453,21 @@ elif page == "📝 Logs":
     # ПАНЕЛЬ КЕРУВАННЯ
     # ==========================================
     col1, col2, col3, col4 = st.columns([1.5, 2, 1.5, 1.5])
-    
+
     with col1:
-        log_limit = st.number_input("Limit", min_value=10, max_value=5000, step=50, key="log_limit")
-        
+        log_limit = st.number_input(
+            "Limit", min_value=10, max_value=5000, step=50, key="log_limit"
+        )
+
     with col3:
-        st.write("") 
         st.write("")
-        auto_refresh = st.toggle("🔄 Auto-Refresh (5s)", value=True, key="log_auto_refresh")
-        
+        st.write("")
+        auto_refresh = st.toggle(
+            "🔄 Auto-Refresh (5s)", value=True, key="log_auto_refresh"
+        )
+
     with col4:
-        st.write("") 
+        st.write("")
         st.write("")
         if st.button("🔄 Manual Refresh", use_container_width=True):
             st.rerun()
@@ -457,16 +482,18 @@ elif page == "📝 Logs":
     db_services = api_get("/logs/services")
     if not db_services:
         db_services = []
-        
+
     unique_services = ["All"] + sorted(db_services)
-    
+
     if st.session_state.log_service not in unique_services:
         st.session_state.log_service = "All"
-        
+
     current_index = unique_services.index(st.session_state.log_service)
-    
+
     with col2:
-        selected_service = st.selectbox("Service Filter", unique_services, index=current_index)
+        selected_service = st.selectbox(
+            "Service Filter", unique_services, index=current_index
+        )
         st.session_state.log_service = selected_service
 
     # ==========================================
@@ -477,13 +504,13 @@ elif page == "📝 Logs":
     api_url = f"/logs?limit={log_limit}"
     if selected_service != "All":
         api_url += f"&service={selected_service}"
-        
+
     logs = api_get(api_url)
 
     if logs:
         df_logs = pd.DataFrame(logs)
         df_logs["ts"] = pd.to_datetime(df_logs["ts"]).dt.strftime("%Y-%m-%d %H:%M:%S")
-        
+
         st.divider()
 
         # ==========================================
@@ -504,13 +531,13 @@ elif page == "📝 Logs":
                 box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
             '>
             """
-            
+
             for _, row in df_logs.iterrows():
                 ts = row["ts"]
                 lvl = row["level"]
                 svc = row["service"]
                 msg = row["message"]
-                
+
                 if lvl == "ERROR":
                     color = "#ff5252"
                     lvl_pad = lvl
@@ -520,14 +547,14 @@ elif page == "📝 Logs":
                 else:
                     color = "#33d9b2"
                     lvl_pad = lvl + " "
-                    
+
                 log_html += f"<div style='margin-bottom: 4px; border-bottom: 1px solid #333; padding-bottom: 2px;'>"
                 log_html += f"<span style='color: #7f8c8d;'>[{ts}]</span> "
                 log_html += f"<span style='color: {color}; font-weight: bold;'>[{lvl_pad}]</span> "
                 log_html += f"<span style='color: #34ace0;'>[{svc}]</span> "
                 log_html += f"<span style='color: #f1f2f6;'>{msg}</span>"
                 log_html += "</div>"
-                
+
             log_html += "</div>"
             st.markdown(log_html, unsafe_allow_html=True)
         else:

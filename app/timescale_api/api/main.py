@@ -12,7 +12,7 @@ from sqlalchemy.future import select
 # Твої імпорти моделей та двигуна бази
 from .database import Base, engine
 from .models import ModelRegistry
-from .routes import metrics, model, settings, logs
+from .routes import logs, metrics, model, settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("TimescaleAPI")

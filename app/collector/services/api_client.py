@@ -1,7 +1,8 @@
 from typing import Any
-from logger.logger import send_system_log
-import httpx
+
 import aiohttp
+import httpx
+from logger.logger import send_system_log
 
 from ..config import settings
 
@@ -16,7 +17,9 @@ async def sync_actual_values(resource: str, current_val: float) -> None:
             response = await client.put(url, json=payload, timeout=5.0)
             response.raise_for_status()
     except Exception as e:
-        await send_system_log(f"⚠️ Помилка синхронізації з API: {e}", level="ERROR", service="collector")
+        await send_system_log(
+            f"⚠️ Помилка синхронізації з API: {e}", level="ERROR", service="collector"
+        )
 
 
 async def save_new_prediction(resource: str, val: float, pred: float) -> None:
@@ -29,7 +32,11 @@ async def save_new_prediction(resource: str, val: float, pred: float) -> None:
             response = await client.post(url, json=payload, timeout=5.0)
             response.raise_for_status()
     except Exception as e:
-        await send_system_log(f"⚠️ Помилка збереження прогнозу в API: {e}", level="ERROR", service="collector")
+        await send_system_log(
+            f"⚠️ Помилка збереження прогнозу в API: {e}",
+            level="ERROR",
+            service="collector",
+        )
 
 
 async def get_system_settings() -> Any:
@@ -39,6 +46,7 @@ async def get_system_settings() -> Any:
         if response.status_code == 200:
             return response.json()
         raise Exception(f"HTTP {response.status_code}")
+
 
 async def get_recent_history(resource: str, limit: int = 10) -> list:
     """Отримує останні N записів з бази для конкретного ресурсу."""
