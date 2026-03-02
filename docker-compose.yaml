@@ -76,6 +76,8 @@ services:
         condition: service_healthy
       lstm-predictor:
         condition: service_healthy
+    volumes:
+      - ./app:/app 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
       interval: 15s

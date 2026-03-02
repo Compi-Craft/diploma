@@ -1,7 +1,7 @@
 import os
 import time
 from typing import Any, Optional
-
+import datetime
 import pandas as pd
 import plotly.graph_objects as go
 import requests
@@ -9,7 +9,7 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
 API_URL = os.getenv("API_URL", "http://timescale_api:5000")
-
+PREDICTOR_URL = os.getenv("PREDICTOR_URL", "http://lstm-predictor:6000")
 st.set_page_config(
     page_title="LPA Dashboard",
     page_icon="🤖",
@@ -66,7 +66,7 @@ st.sidebar.title("🤖 LPA Dashboard")
 st.sidebar.markdown("---")
 page = st.sidebar.radio(
     "Navigation",
-    ["📈 Metrics", "🗂️ Model Registry", "📤 Upload Model", "⚙️ Settings"],
+    ["📈 Metrics", "🗂️ Model Registry", "📤 Upload Model", "⚙️ Settings", "📝 Logs"],
     label_visibility="collapsed",
 )
 
@@ -215,26 +215,95 @@ elif page == "🗂️ Model Registry":
 
         # Activate a different model
         st.divider()
-        st.subheader("🔄 Activate Model")
+        st.subheader("🔄 Activate / Reload Model")
 
+        # Беремо абсолютно всі версії, незалежно від їхнього статусу
         all_versions = [m["version"] for m in models]
-        inactive_versions = [m["version"] for m in models if not m["is_active"]]
 
-        if inactive_versions:
+        if all_versions:
+            # Знаходимо індекс поточної активної моделі, щоб вона була вибрана за замовчуванням
+            active_index = 0
+            for i, m in enumerate(models):
+                if m["is_active"]:
+                    active_index = i
+                    break
+
             selected = st.selectbox(
-                "Select version to activate",
-                inactive_versions,
-                help="Only inactive models are listed here",
+                "Select version to activate or force-reload",
+                all_versions,
+                index=active_index,
+                help="Select any model to activate it. Selecting the currently active model will force the Predictor to reload its files."
             )
-            if st.button(f"✅ Activate **{selected}**", type="primary"):
-                with st.spinner(f"Activating {selected}..."):
+            
+            if st.button(f"✅ Activate / Reload **{selected}**", type="primary"):
+                with st.spinner(f"Sending reload signal for {selected}..."):
+                    # Звертаємося до нашого API
                     result = api_put(f"/models/{selected}/activate")
+                    
                 if result:
                     st.success(result.get("message", f"Model {selected} activated."))
                     time.sleep(1)
                     st.rerun()
         else:
-            st.info("ℹ️ There is only one model registered, or all models are active.")
+            st.info("ℹ️ No models registered yet.")
+
+        st.divider()
+        st.subheader("🛠️ Fine-Tune a Model")
+        st.markdown("Запусти фоновий процес донавчання моделі на історичних даних.")
+
+        col_ft1, col_ft2 = st.columns(2)
+        with col_ft1:
+            tune_version = st.selectbox(
+                "Base Model Version",
+                all_versions, # Тут можна вибирати будь-яку модель, навіть активну
+                help="Обери модель, ваги якої будуть використані як базові."
+            )
+
+        with col_ft2:
+            epochs = st.number_input("Epochs", min_value=1, max_value=100, value=5, step=1)
+            batch_size = st.number_input("Batch Size", min_value=1, max_value=256, value=16, step=1)
+
+        st.write("📅 **Select Data Range**")
+        
+        # Дефолтні значення: від вчорашнього дня до зараз
+        now = datetime.datetime.now()
+        yesterday = now - datetime.timedelta(days=1)
+
+        col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+        with col_d1:
+            start_date = st.date_input("Start Date", value=yesterday)
+        with col_d2:
+            start_time = st.time_input("Start Time", value=yesterday.time())
+        with col_d3:
+            end_date = st.date_input("End Date", value=now)
+        with col_d4:
+            end_time = st.time_input("End Time", value=now.time())
+
+        if st.button("🚀 Start Fine-Tuning", type="secondary"):
+            # Збираємо дату та час у ISO-формат (наприклад, 2026-03-01T10:00:00Z)
+            start_dt = datetime.datetime.combine(start_date, start_time).isoformat() + "Z"
+            end_dt = datetime.datetime.combine(end_date, end_time).isoformat() + "Z"
+
+            payload = {
+                "target_version": tune_version,
+                "start_time": start_dt,
+                "end_time": end_dt,
+                "epochs": epochs,
+                "batch_size": batch_size
+            }
+
+            with st.spinner(f"Initiating fine-tuning for {tune_version}..."):
+                try:
+                    # УВАГА: Streamlit має стукати безпосередньо у контейнер Предиктора.
+                    # Перевір, чи правильний тут URL для твоєї Docker-мережі.
+                    response = requests.post(f"{PREDICTOR_URL}/retrain", json=payload)
+                    
+                    if response.status_code == 200:
+                        st.success("✅ Процес донавчання запущено у фоні! Нова модель з'явиться в таблиці після завершення (натисни Refresh за кілька хвилин).")
+                    else:
+                        st.error(f"❌ Помилка: {response.text}")
+                except requests.exceptions.RequestException as e:
+                    st.error(f"❌ Не вдалося з'єднатися з сервісом Предиктора: {e}")
 
     elif models is not None:
         st.info("No models registered yet. Upload one using **Upload Model**.")
@@ -351,6 +420,120 @@ elif page == "⚙️ Settings":
             if result:
                 st.success("✅ Settings saved successfully!")
                 st.rerun()
+elif page == "📝 Logs":
+    st.subheader("📋 System Logs & Events")
+
+    if "log_limit" not in st.session_state:
+        st.session_state.log_limit = 100
+    if "log_service" not in st.session_state:
+        st.session_state.log_service = "All"
+
+    # ==========================================
+    # ПАНЕЛЬ КЕРУВАННЯ
+    # ==========================================
+    col1, col2, col3, col4 = st.columns([1.5, 2, 1.5, 1.5])
+    
+    with col1:
+        log_limit = st.number_input("Limit", min_value=10, max_value=5000, step=50, key="log_limit")
+        
+    with col3:
+        st.write("") 
+        st.write("")
+        auto_refresh = st.toggle("🔄 Auto-Refresh (5s)", value=True, key="log_auto_refresh")
+        
+    with col4:
+        st.write("") 
+        st.write("")
+        if st.button("🔄 Manual Refresh", use_container_width=True):
+            st.rerun()
+
+    if auto_refresh:
+        st_autorefresh(interval=5000, limit=None, key="logs_autorefresh")
+
+    # ==========================================
+    # ОТРИМАННЯ СЕРВІСІВ ДЛЯ ФІЛЬТРУ
+    # ==========================================
+    # Робимо запит до нового ендпоінту
+    db_services = api_get("/logs/services")
+    if not db_services:
+        db_services = []
+        
+    unique_services = ["All"] + sorted(db_services)
+    
+    if st.session_state.log_service not in unique_services:
+        st.session_state.log_service = "All"
+        
+    current_index = unique_services.index(st.session_state.log_service)
+    
+    with col2:
+        selected_service = st.selectbox("Service Filter", unique_services, index=current_index)
+        st.session_state.log_service = selected_service
+
+    # ==========================================
+    # ОТРИМАННЯ ТА ФІЛЬТРАЦІЯ ЛОГІВ
+    # ==========================================
+    # Тепер, якщо вибрано конкретний сервіс, ми можемо передати його прямо в API запит
+    # (Це ще більше оптимізує роботу, бо база не буде тягнути зайві логи)
+    api_url = f"/logs?limit={log_limit}"
+    if selected_service != "All":
+        api_url += f"&service={selected_service}"
+        
+    logs = api_get(api_url)
+
+    if logs:
+        df_logs = pd.DataFrame(logs)
+        df_logs["ts"] = pd.to_datetime(df_logs["ts"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+        
+        st.divider()
+
+        # ==========================================
+        # ВІЗУАЛІЗАЦІЯ В СТИЛІ GRAFANA
+        # ==========================================
+        if not df_logs.empty:
+            log_html = """
+            <div style='
+                background-color: #1e1e1e; 
+                padding: 15px; 
+                border-radius: 8px; 
+                font-family: "Courier New", Courier, monospace; 
+                font-size: 14px;
+                height: 600px; 
+                overflow-y: auto; 
+                color: #cccccc;
+                line-height: 1.5;
+                box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
+            '>
+            """
+            
+            for _, row in df_logs.iterrows():
+                ts = row["ts"]
+                lvl = row["level"]
+                svc = row["service"]
+                msg = row["message"]
+                
+                if lvl == "ERROR":
+                    color = "#ff5252"
+                    lvl_pad = lvl
+                elif lvl == "WARNING":
+                    color = "#ffb142"
+                    lvl_pad = lvl
+                else:
+                    color = "#33d9b2"
+                    lvl_pad = lvl + " "
+                    
+                log_html += f"<div style='margin-bottom: 4px; border-bottom: 1px solid #333; padding-bottom: 2px;'>"
+                log_html += f"<span style='color: #7f8c8d;'>[{ts}]</span> "
+                log_html += f"<span style='color: {color}; font-weight: bold;'>[{lvl_pad}]</span> "
+                log_html += f"<span style='color: #34ace0;'>[{svc}]</span> "
+                log_html += f"<span style='color: #f1f2f6;'>{msg}</span>"
+                log_html += "</div>"
+                
+            log_html += "</div>"
+            st.markdown(log_html, unsafe_allow_html=True)
+        else:
+            st.info(f"ℹ️ Немає логів для сервісу '{selected_service}'.")
+    else:
+        st.info("ℹ️ Системних логів поки немає.")
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.sidebar.markdown("---")

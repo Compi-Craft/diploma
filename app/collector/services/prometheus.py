@@ -1,5 +1,5 @@
 import httpx
-
+from logger.logger import send_system_log
 from ..config import settings
 
 
@@ -14,5 +14,5 @@ async def fetch_metric(query: str, prom_url: str) -> float | None:
                     return float(results[0]["value"][1])
             return None
     except Exception as e:
-        print(f"⚠️ Prometheus Connection Error: {e}")
+        await send_system_log(f"⚠️ Prometheus Connection Error: {e}", level="ERROR", service="collector")
         return None

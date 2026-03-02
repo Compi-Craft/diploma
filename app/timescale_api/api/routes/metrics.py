@@ -86,3 +86,27 @@ async def get_history(
     )
     result = await db.execute(query)
     return result.scalars().all()
+
+from typing import Optional
+
+@router.get("/history/range")
+async def get_history_by_range(
+    start_time: datetime.datetime, 
+    end_time: datetime.datetime,
+    resource: Optional[str] = None, # Зробили опціональним
+    db: AsyncSession = Depends(get_db)
+):
+    query = (
+        select(MetricEntry)
+        .filter(MetricEntry.actual_value.isnot(None))
+        .filter(MetricEntry.ts >= start_time)
+        .filter(MetricEntry.ts <= end_time)
+        .order_by(MetricEntry.ts.asc())
+    )
+    if resource:
+        query = query.filter(MetricEntry.resource == resource)
+        
+    result = await db.execute(query)
+    return result.scalars().all()
+
+

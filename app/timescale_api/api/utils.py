@@ -1,5 +1,6 @@
 import datetime
 import uuid
+from logger.logger import send_system_log
 
 import aiohttp
 from api import PREDICTOR_URL
@@ -14,16 +15,12 @@ async def notify_predictor_to_reload(version: str, model_path: str, scaler_path:
 
             async with session.post(url, json=payload) as response:
                 if response.status == 200:
-                    print(
-                        f"✅ Предиктор успішно отримав команду на Hot Swap до {version}"
-                    )
+                    await send_system_log(f"✅ Предиктор успішно отримав команду на Hot Swap до {version}", level="INFO", service="timescale_api")
                 else:
                     error_msg = await response.text()
-                    print(
-                        f"❌ Предиктор повернув помилку {response.status}: {error_msg}"
-                    )
+                    await send_system_log(f"❌ Предиктор повернув помилку {response.status}: {error_msg}", level="ERROR", service="timescale_api")
     except Exception as e:
-        print(f"❌ Помилка з'єднання з Предиктором: {e}")
+        await send_system_log(f"❌ Помилка з'єднання з Предиктором: {e}", level="ERROR", service="timescale_api")
 
 
 def generate_model_version() -> str:

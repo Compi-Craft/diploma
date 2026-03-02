@@ -68,3 +68,17 @@ class SettingsRead(SettingsUpdate):
 
     class Config:
         from_attributes = True
+
+
+class LogCreate(BaseModel):
+    level: str
+    service: str
+    message: str
+
+
+class LogRead(LogCreate):
+    id: int
+    ts: datetime
+
+    class Config:
+        from_attributes = True

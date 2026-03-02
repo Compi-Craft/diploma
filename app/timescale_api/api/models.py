@@ -73,3 +73,15 @@ class SystemSettings(Base):
     rps_query = Column(
         String, default='sum(rate(http_requests_total{pod=~"podinfo-.*"}[1m]))'
     )
+
+
+class SystemLog(Base):
+    __tablename__ = "lpa_logs"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # Індексуємо за часом, щоб швидко сортувати в дашборді
+    ts = Column(DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc), index=True)
+    level = Column(String(20), nullable=False)   # 'INFO', 'WARNING', 'ERROR'
+    service = Column(String(50), nullable=False) # 'collector_worker', 'predictor', 'api'
+    message = Column(String, nullable=False)
+

@@ -7,7 +7,9 @@ from models.schemas import (
     PredictionResponse,
     ReloadRequest,
     StatusResponse,
+    RetrainCommand,
 )
+from services.utils import run_finetune_pipeline
 from services.model_manager import model_manager
 
 router = APIRouter()
@@ -48,3 +50,9 @@ async def reload_model(request: ReloadRequest, background_tasks: BackgroundTasks
 @router.get("/status", response_model=StatusResponse)
 async def status() -> StatusResponse:
     return StatusResponse(current_version=model_manager.version, status="active")
+
+@router.post("/retrain")
+async def trigger_retraining(cmd: RetrainCommand, background_tasks: BackgroundTasks):
+    """Ендпоінт, який викликає Streamlit Дашборд."""
+    background_tasks.add_task(run_finetune_pipeline, cmd)
+    return {"message": f"Процес донавчання моделі {cmd.target_version} запущено у фоні."}

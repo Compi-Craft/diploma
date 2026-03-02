@@ -12,7 +12,7 @@ numpy
 prometheus-api-client
 locust
 joblib
-scikit-learn
+scikit-learn==1.6.1
 prometheus-client
 python-multipart
 aiohttp

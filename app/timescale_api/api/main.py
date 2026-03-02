@@ -12,7 +12,7 @@ from sqlalchemy.future import select
 # Твої імпорти моделей та двигуна бази
 from .database import Base, engine
 from .models import ModelRegistry
-from .routes import metrics, model, settings
+from .routes import metrics, model, settings, logs
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("TimescaleAPI")
@@ -67,6 +67,7 @@ app = FastAPI(
 app.include_router(metrics.router)
 app.include_router(model.router)
 app.include_router(settings.router)
+app.include_router(logs.router)
 
 
 @app.get("/health")
