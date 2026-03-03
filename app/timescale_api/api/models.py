@@ -1,6 +1,5 @@
 import datetime
 
-from api import MODELS_DIR, SCALERS_DIR
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 

@@ -1,8 +1,6 @@
 import httpx
 from logger.logger import send_system_log
 
-from ..config import settings
-
 
 async def fetch_metric(query: str, prom_url: str) -> float | None:
     try:

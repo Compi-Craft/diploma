@@ -1,5 +1,5 @@
 import datetime
-from typing import Any, List, Sequence
+from typing import Any, List, Optional, Sequence
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import update
@@ -90,9 +90,6 @@ async def get_history(
     )
     result = await db.execute(query)
     return result.scalars().all()
-
-
-from typing import Optional
 
 
 @router.get("/history/range")
