@@ -8,9 +8,9 @@ import joblib
 import numpy as np
 import requests
 import tensorflow as tf
+from config import API_URL
 from core.config import settings
-from logger.logger import send_system_log_sync
-from lstm_module import API_URL
+from shared.logger import send_system_log_sync
 from sklearn.preprocessing import StandardScaler
 
 

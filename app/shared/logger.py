@@ -1,9 +1,6 @@
-import os
-
 import aiohttp
 import requests
-
-API_URL = os.getenv("API_URL", "http://localhost:8000")  # Адреса твого API
+from config import API_URL
 
 
 async def send_system_log(

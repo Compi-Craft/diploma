@@ -1,64 +1,31 @@
 import datetime
-import os
 import time
-from typing import Any, Optional
 
 import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
+from config import API_URL, PREDICTOR_URL
+from shared.schemas import (
+    GenericResponse,
+    LogRead,
+    LogServiceRead,
+    MetricHistoryRead,
+    MetricRead,
+    ModelRead,
+    RetrainCommand,
+    SettingsRead,
+    SettingsUpdate,
+)
+from shared.utils import sync_http_request
 from streamlit_autorefresh import st_autorefresh
 
-API_URL = os.getenv("API_URL", "http://timescale_api:5000")
-PREDICTOR_URL = os.getenv("PREDICTOR_URL", "http://lstm-predictor:6000")
 st.set_page_config(
     page_title="LPA Dashboard",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-# ── Helpers ──────────────────────────────────────────────────────────────────
-
-
-def api_get(path: str, params: Optional[dict] = None) -> Any:
-    try:
-        r = requests.get(f"{API_URL}{path}", params=params, timeout=5)
-        r.raise_for_status()
-        return r.json()
-    except requests.exceptions.ConnectionError:
-        st.error(f"❌ Cannot connect to API at {API_URL}")
-        return None
-    except Exception as e:
-        st.error(f"❌ API Error: {e}")
-        return None
-
-
-def api_put(path: str, json: Optional[dict] = None) -> Any:
-    try:
-        r = requests.put(f"{API_URL}{path}", json=json, timeout=5)
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        st.error(f"❌ API Error: {e}")
-        return None
-
-
-def api_post(
-    path: str,
-    json: Optional[dict] = None,
-    files: Optional[dict] = None,
-    data: Optional[dict] = None,
-) -> Any:
-    try:
-        r = requests.post(
-            f"{API_URL}{path}", json=json, files=files, data=data, timeout=15
-        )
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        st.error(f"❌ API Error: {e}")
-        return None
 
 
 # ── Sidebar navigation ────────────────────────────────────────────────────────
@@ -76,12 +43,24 @@ page = st.sidebar.radio(
 # ═════════════════════════════════════════════════════════════════════════════
 if page == "📈 Metrics":
     st.title("📈 Real-time Metrics")
-
     st.sidebar.markdown("### Chart options")
-    refresh_interval = st.sidebar.slider("Auto-refresh (sec)", 5, 60, 15)
+    # 1. Додаємо перемикач (за замовчуванням увімкнений)
+    auto_refresh_enabled = st.sidebar.toggle("🔄 Auto-refresh", value=True)
+
+    # 2. Повзунок інтервалу стає неактивним, якщо перемикач вимкнено
+    refresh_interval = st.sidebar.slider(
+        "Refresh interval (sec)",
+        5,
+        60,
+        15,
+        disabled=not auto_refresh_enabled,  # 👈 Магія UX
+    )
+
     limit = st.sidebar.slider("History points", 20, 300, 100)
 
-    st_autorefresh(interval=refresh_interval * 1000, key="metrics_refresh")
+    # 3. Викликаємо функцію оновлення ТІЛЬКИ якщо перемикач активний
+    if auto_refresh_enabled:
+        st_autorefresh(interval=refresh_interval * 1000, key="metrics_refresh")
 
     RESOURCES: dict[str, tuple[str, str, str]] = {
         "cpu": ("CPU Usage (cores)", "#2196F3", "#FF5722"),
@@ -90,11 +69,17 @@ if page == "📈 Metrics":
     }
 
     for resource, (label, actual_color, pred_color) in RESOURCES.items():
-        data = api_get("/metrics/history", {"resource": resource, "limit": limit})
+        data = sync_http_request(
+            "GET",
+            f"{API_URL}/metrics/history",
+            payload=MetricHistoryRead(resource=resource, limit=limit),
+            response_model=list[MetricRead],
+        )
 
         st.subheader(label)
         if data:
-            df = pd.DataFrame(data)
+            raw_dicts = [item.model_dump() for item in data]
+            df = pd.DataFrame(raw_dicts)
             df["ts"] = pd.to_datetime(df["ts"])
             df["target_ts"] = pd.to_datetime(df["target_ts"])
             df = df.sort_values("ts")
@@ -146,8 +131,8 @@ if page == "📈 Metrics":
                     orientation="h",
                     yanchor="bottom",
                     y=1.02,
-                    xanchor="right",
-                    x=1,
+                    xanchor="left",
+                    x=0,
                 ),
                 xaxis_title="Time",
                 yaxis_title=label,
@@ -173,10 +158,13 @@ elif page == "🗂️ Model Registry":
         if st.button("🔄 Refresh"):
             st.rerun()
 
-    models = api_get("/models")
+    models = sync_http_request(
+        method="GET", url=f"{API_URL}/models", response_model=list[ModelRead]
+    )
 
     if models:
-        df = pd.DataFrame(models)
+        raw_dicts = [model.model_dump() for model in models]
+        df = pd.DataFrame(raw_dicts)
 
         # Format columns for display
         df["created_at"] = pd.to_datetime(df["created_at"]).dt.strftime(
@@ -205,35 +193,29 @@ elif page == "🗂️ Model Registry":
         st.divider()
 
         # Active model info
-        active_models = [m for m in models if m["is_active"]]
+        active_models = [m for m in models if m.is_active]
         if active_models:
             active = active_models[0]
             st.subheader("🟢 Currently Active Model")
             col1, col2, col3 = st.columns(3)
-            col1.metric("Version", active["version"])
-            col2.metric(
-                "MSE", f"{active['mse']:.6f}" if active.get("mse") is not None else "—"
-            )
-            col3.metric(
-                "MAE", f"{active['mae']:.6f}" if active.get("mae") is not None else "—"
-            )
+            col1.metric("Version", active.version)
+            col2.metric("MSE", f"{active.mse:.6f}" if active.mse is not None else "—")
+            col3.metric("MAE", f"{active.mae:.6f}" if active.mae is not None else "—")
             with st.expander("File paths"):
-                st.code(
-                    f"Model:  {active['model_path']}\nScaler: {active['scaler_path']}"
-                )
+                st.code(f"Model:  {active.model_path}\nScaler: {active.scaler_path}")
 
         # Activate a different model
         st.divider()
         st.subheader("🔄 Activate / Reload Model")
 
         # Беремо абсолютно всі версії, незалежно від їхнього статусу
-        all_versions = [m["version"] for m in models]
+        all_versions = [m.version for m in models]
 
         if all_versions:
             # Знаходимо індекс поточної активної моделі, щоб вона була вибрана за замовчуванням
             active_index = 0
             for i, m in enumerate(models):
-                if m["is_active"]:
+                if m.is_active:
                     active_index = i
                     break
 
@@ -247,10 +229,13 @@ elif page == "🗂️ Model Registry":
             if st.button(f"✅ Activate / Reload **{selected}**", type="primary"):
                 with st.spinner(f"Sending reload signal for {selected}..."):
                     # Звертаємося до нашого API
-                    result = api_put(f"/models/{selected}/activate")
-
+                    result = sync_http_request(
+                        method="PUT",
+                        url=f"{API_URL}/models/{selected}/activate",
+                        response_model=GenericResponse,
+                    )
                 if result:
-                    st.success(result.get("message", f"Model {selected} activated."))
+                    st.success(result.message)
                     time.sleep(1)
                     st.rerun()
         else:
@@ -294,10 +279,8 @@ elif page == "🗂️ Model Registry":
 
         if st.button("🚀 Start Fine-Tuning", type="secondary"):
             # Збираємо дату та час у ISO-формат (наприклад, 2026-03-01T10:00:00Z)
-            start_dt = (
-                datetime.datetime.combine(start_date, start_time).isoformat() + "Z"
-            )
-            end_dt = datetime.datetime.combine(end_date, end_time).isoformat() + "Z"
+            start_dt = datetime.datetime.combine(start_date, start_time)
+            end_dt = datetime.datetime.combine(end_date, end_time)
 
             payload = {
                 "target_version": tune_version,
@@ -311,14 +294,18 @@ elif page == "🗂️ Model Registry":
                 try:
                     # УВАГА: Streamlit має стукати безпосередньо у контейнер Предиктора.
                     # Перевір, чи правильний тут URL для твоєї Docker-мережі.
-                    response = requests.post(f"{PREDICTOR_URL}/retrain", json=payload)
-
-                    if response.status_code == 200:
+                    response = sync_http_request(
+                        method="POST",
+                        url=f"{PREDICTOR_URL}/retrain",
+                        payload=RetrainCommand.model_validate(payload),
+                        response_model=GenericResponse,
+                    )
+                    if response:
                         st.success(
                             "✅ Процес донавчання запущено у фоні! Нова модель з'явиться в таблиці після завершення (натисни Refresh за кілька хвилин)."
                         )
                     else:
-                        st.error(f"❌ Помилка: {response.text}")
+                        st.error(f"❌ Помилка: {response.message}")
                 except requests.exceptions.RequestException as e:
                     st.error(f"❌ Не вдалося з'єднатися з сервісом Предиктора: {e}")
 
@@ -378,10 +365,15 @@ elif page == "📤 Upload Model":
                 if stripped_version:
                     form_data["version"] = stripped_version
 
-                result = api_post("/models/upload", files=files, data=form_data)
-
+                result = sync_http_request(
+                    url=f"{API_URL}/models/upload",
+                    method="POST",
+                    data=form_data,
+                    files=files,
+                    response_model=ModelRead,
+                )
             if result:
-                st.success(f"✅ Model **{result['version']}** uploaded successfully!")
+                st.success(f"✅ Model **{result.version}** uploaded successfully!")
                 st.json(result)
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -390,38 +382,40 @@ elif page == "📤 Upload Model":
 elif page == "⚙️ Settings":
     st.title("⚙️ System Settings")
 
-    settings_data = api_get("/settings")
+    settings_data = sync_http_request(
+        method="GET", url=f"{API_URL}/settings", response_model=SettingsRead
+    )
 
     if settings_data:
         with st.form("settings_form"):
             st.subheader("Collector")
             is_active = st.checkbox(
                 "Collector Active",
-                value=settings_data.get("is_collector_active", True),
+                value=settings_data.is_collector_active,
                 help="Enable or disable the metric collection loop",
             )
 
             st.subheader("Prometheus")
             prom_url = st.text_input(
                 "Prometheus URL",
-                value=settings_data.get("prometheus_url", ""),
+                value=settings_data.prometheus_url,
                 help="Full URL to Prometheus query API, e.g. http://host:9090/api/v1/query",
             )
 
             st.subheader("PromQL Queries")
             cpu_query = st.text_area(
                 "CPU Query",
-                value=settings_data.get("cpu_query", ""),
+                value=settings_data.cpu_query,
                 height=90,
             )
             ram_query = st.text_area(
                 "RAM Query",
-                value=settings_data.get("ram_query", ""),
+                value=settings_data.ram_query,
                 height=90,
             )
             rps_query = st.text_area(
                 "RPS Query",
-                value=settings_data.get("rps_query", ""),
+                value=settings_data.rps_query,
                 height=90,
             )
 
@@ -437,7 +431,12 @@ elif page == "⚙️ Settings":
                 "ram_query": ram_query,
                 "rps_query": rps_query,
             }
-            result = api_put("/settings", json=payload)
+            result = sync_http_request(
+                url=f"{API_URL}/settings",
+                method="PUT",
+                payload=SettingsUpdate.model_validate(payload),
+                response_model=SettingsRead,
+            )
             if result:
                 st.success("✅ Settings saved successfully!")
                 st.rerun()
@@ -479,7 +478,9 @@ elif page == "📝 Logs":
     # ОТРИМАННЯ СЕРВІСІВ ДЛЯ ФІЛЬТРУ
     # ==========================================
     # Робимо запит до нового ендпоінту
-    db_services = api_get("/logs/services")
+    db_services = sync_http_request(
+        method="GET", url=f"{API_URL}/logs/services", response_model=list[str]
+    )
     if not db_services:
         db_services = []
 
@@ -501,14 +502,16 @@ elif page == "📝 Logs":
     # ==========================================
     # Тепер, якщо вибрано конкретний сервіс, ми можемо передати його прямо в API запит
     # (Це ще більше оптимізує роботу, бо база не буде тягнути зайві логи)
-    api_url = f"/logs?limit={log_limit}"
-    if selected_service != "All":
-        api_url += f"&service={selected_service}"
-
-    logs = api_get(api_url)
-
+    selected_service = selected_service if selected_service != "All" else None
+    logs = sync_http_request(
+        method="GET",
+        url=f"{API_URL}/logs",
+        response_model=list[LogRead],
+        payload=LogServiceRead(service=selected_service, limit=log_limit),
+    )
     if logs:
-        df_logs = pd.DataFrame(logs)
+        raw_dicts = [log.model_dump() for log in logs]
+        df_logs = pd.DataFrame(raw_dicts)
         df_logs["ts"] = pd.to_datetime(df_logs["ts"]).dt.strftime("%Y-%m-%d %H:%M:%S")
 
         st.divider()

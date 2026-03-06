@@ -1,9 +1,10 @@
-from typing import Any
-
 import numpy as np
 from core.config import settings
 from fastapi import APIRouter, BackgroundTasks, HTTPException
-from models.schemas import (
+from services.model_manager import model_manager
+from services.utils import run_finetune_pipeline
+from shared.schemas import (
+    GenericResponse,
     MetricPoint,
     PredictionRequest,
     PredictionResponse,
@@ -11,8 +12,6 @@ from models.schemas import (
     RetrainCommand,
     StatusResponse,
 )
-from services.model_manager import model_manager
-from services.utils import run_finetune_pipeline
 
 router = APIRouter()
 
@@ -41,17 +40,20 @@ async def predict(request: PredictionRequest) -> PredictionResponse:
     )
 
 
-@router.post("/reload")
+@router.post("/reload", response_model=GenericResponse)
 async def reload_model(
     request: ReloadRequest, background_tasks: BackgroundTasks
-) -> dict[str, str]:
-    background_tasks.add_task(
-        model_manager.load_new_model,
-        request.model_path,
-        request.scaler_path,
-        request.version,
-    )
-    return {"message": f"Reloading started for {request.version}"}
+) -> GenericResponse:
+    try:
+        background_tasks.add_task(
+            model_manager.load_new_model,
+            request.model_path,
+            request.scaler_path,
+            request.version,
+        )
+        return GenericResponse(message=f"Reloading started for {request.version}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start reload: {str(e)}")
 
 
 @router.get("/status", response_model=StatusResponse)
@@ -62,9 +64,9 @@ async def status() -> StatusResponse:
 @router.post("/retrain")
 async def trigger_retraining(
     cmd: RetrainCommand, background_tasks: BackgroundTasks
-) -> Any:
+) -> GenericResponse:
     """Ендпоінт, який викликає Streamlit Дашборд."""
     background_tasks.add_task(run_finetune_pipeline, cmd)
-    return {
-        "message": f"Процес донавчання моделі {cmd.target_version} запущено у фоні."
-    }
+    return GenericResponse(
+        message=f"Fine-tuning process for {cmd.target_version} started in the background."
+    )

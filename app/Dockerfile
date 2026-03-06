@@ -16,5 +16,5 @@ COPY . .
 ENV PYTHONPATH=/app
 ENV API_URL="http://timescale_api:5000"
 ENV PREDICTOR_URL="http://lstm-predictor:6000"
-ENV MODELS_DIR="/app/lstm_module/ml_models"
-ENV SCALERS_DIR="/app/lstm_module/scalers"
+ENV MODELS_DIR="/app/ml_models"
+ENV SCALERS_DIR="/app/scalers"

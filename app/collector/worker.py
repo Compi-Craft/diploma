@@ -2,10 +2,11 @@ import asyncio
 from collections import deque
 from typing import Deque, Dict
 
-from logger.logger import send_system_log
 from prometheus_client import Gauge, start_http_server
+from shared.logger import send_system_log
+from shared.schemas import SettingsRead
 
-from .services import api_client, predictor, prometheus
+from .services import api_client, prometheus
 
 # --- Оголошуємо наші метрики ---
 PREDICTED_CPU = Gauge(
@@ -43,9 +44,21 @@ async def restore_history_buffer() -> None:
 
         for i in range(min_len):
             point = {
-                "cpu": cpu_data[i].get("input_value", 0.0),
-                "ram": ram_data[i].get("input_value", 0.0),
-                "rps": rps_data[i].get("input_value", 0.0),
+                "cpu": (
+                    cpu_data[i].input_value
+                    if cpu_data[i].input_value is not None
+                    else 0.0
+                ),
+                "ram": (
+                    ram_data[i].input_value
+                    if ram_data[i].input_value is not None
+                    else 0.0
+                ),
+                "rps": (
+                    rps_data[i].input_value
+                    if rps_data[i].input_value is not None
+                    else 0.0
+                ),
             }
             history_buffer.append(point)
 
@@ -65,7 +78,7 @@ async def restore_history_buffer() -> None:
         )
 
 
-async def process_metrics_task(sys_settings: dict) -> None:
+async def process_metrics_task(sys_settings: SettingsRead) -> None:
     global is_busy
     if is_busy:
         return
@@ -74,11 +87,11 @@ async def process_metrics_task(sys_settings: dict) -> None:
     await send_system_log("🕒 Початок збору метрик", level="INFO", service="collector")
 
     try:
-        prom_url: str = sys_settings.get("prometheus_url") or ""
+        prom_url: str = sys_settings.prometheus_url or ""
         queries = {
-            "cpu": sys_settings.get("cpu_query"),
-            "ram": sys_settings.get("ram_query"),
-            "rps": sys_settings.get("rps_query"),
+            "cpu": sys_settings.cpu_query,
+            "ram": sys_settings.ram_query,
+            "rps": sys_settings.rps_query,
         }
 
         current_metrics = {}
@@ -151,25 +164,29 @@ async def process_metrics_task(sys_settings: dict) -> None:
         # 4. Якщо є 10 точок - робимо прогноз
         if len(history_buffer) == 10:
             payload = list(history_buffer)
-            predictions = await predictor.get_prediction(payload)
+            predictions = await api_client.get_prediction(payload)
 
             if predictions:
                 await send_system_log(
-                    f"   🔮 Прогноз: CPU={predictions['cpu']:.2f}, RAM={predictions['ram']:.2f}, RPS={predictions['rps']:.2f}",
+                    f"   🔮 Прогноз: CPU={predictions.cpu:.2f}, RAM={predictions.ram:.2f}, RPS={predictions.rps:.2f}",
                     level="INFO",
                     service="collector",
                 )
 
                 # Віддаємо прогнози в Prometheus
-                PREDICTED_CPU.set(predictions["cpu"])
-                PREDICTED_RAM.set(predictions["ram"])
-                PREDICTED_RPS.set(predictions["rps"])
+                PREDICTED_CPU.set(predictions.cpu)
+                PREDICTED_RAM.set(predictions.ram)
+                PREDICTED_RPS.set(predictions.rps)
 
-                # Записуємо в базу новий прогноз
-                for resource, pred_val in predictions.items():
-                    await api_client.save_new_prediction(
-                        resource, current_metrics[resource], pred_val
-                    )
+                await api_client.save_new_prediction(
+                    "cpu", current_metrics["cpu"], predictions.cpu
+                )
+                await api_client.save_new_prediction(
+                    "ram", current_metrics["ram"], predictions.ram
+                )
+                await api_client.save_new_prediction(
+                    "rps", current_metrics["rps"], predictions.rps
+                )
         else:
             await send_system_log(
                 f"   ⏳ Накопичення історії: {len(history_buffer)}/10. Прогноз пропускаємо.",
@@ -207,19 +224,9 @@ async def main() -> None:
     interval = 15
 
     while True:
-        try:
-            # 1. Запитуємо свіжі налаштування з нашого API!
-            sys_settings = await api_client.get_system_settings()
-            is_active = sys_settings.get("is_collector_active", True)
-        except Exception as e:
-
-            await send_system_log(
-                f"⚠️ Не вдалося отримати налаштування з API ({e}). Використовуються локальні дефолти.",
-                level="WARNING",
-                service="collector",
-            )
-            await asyncio.sleep(5)
-            continue
+        # 1. Запитуємо свіжі налаштування з нашого API!
+        sys_settings = await api_client.get_system_settings()
+        is_active = sys_settings.is_collector_active
 
         # 2. Перевіряємо, чи ввімкнений колектор
         if is_active:

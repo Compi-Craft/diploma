@@ -1,93 +1,47 @@
-import datetime
 from typing import Dict
 
-import aiohttp
 import numpy as np
-from logger.logger import send_system_log
-from lstm_module import API_URL
-from models.schemas import RetrainCommand
+from config import API_URL
 from services.model_manager import model_manager
+from shared.logger import send_system_log
+from shared.schemas import MetricHistoryRangeRead, MetricRead, ModelRead, RetrainCommand
+from shared.utils import async_http_request
 
 
 async def run_finetune_pipeline(cmd: RetrainCommand) -> None:
     """Фонова задача: збирає дані, шляхи і запускає навчання."""
     try:
-        async with aiohttp.ClientSession() as session:
-            # 1. Дістаємо шляхи до моделі
-            async with session.get(
-                f"{API_URL}/models/byversion/{cmd.target_version}"
-            ) as resp:
-                if resp.status != 200:
-                    await send_system_log(
-                        f"❌ Не вдалося знайти модель {cmd.target_version}",
-                        level="ERROR",
-                        service="lstm_module",
-                    )
-                    return
-                model_meta = await resp.json()
-
-            # 2. Дістаємо історичні дані за період
-            url = f"{API_URL}/metrics/history/range?start_time={cmd.start_time}&end_time={cmd.end_time}"
-            async with session.get(url) as resp:
-                if resp.status != 200:
-                    await send_system_log(
-                        f"❌ Не вдалося завантажити дані для навчання",
-                        level="ERROR",
-                        service="lstm_module",
-                    )
-                    return
-                history_data = await resp.json()
-
-        history_data.sort(key=lambda x: x["ts"])
-
-        raw_values = []
-        current_bucket: Dict[str, float] = {}
-        last_ts = None
-
-        # 2. Розумне групування за "вікнами" (Proximity Grouping)
-        for item in history_data:
-            # Парсимо час (замінюємо Z на +00:00 для сумісності з fromisoformat)
-            ts_str = item["ts"].replace("Z", "+00:00")
-            current_ts = datetime.datetime.fromisoformat(ts_str)
-
-            res = item["resource"]
-            val = item["actual_value"]
-
-            # Якщо це перша точка АБО з моменту минулої пройшло більше 2 секунд -> це новий цикл збору
-            if last_ts is None or (current_ts - last_ts).total_seconds() > 2.0:
-                # Зберігаємо попередній бакет, якщо в ньому є всі 3 метрики
-                if (
-                    "cpu" in current_bucket
-                    and "ram" in current_bucket
-                    and "rps" in current_bucket
-                ):
-                    raw_values.append(
-                        [
-                            current_bucket["cpu"],
-                            current_bucket["ram"],
-                            current_bucket["rps"],
-                        ]
-                    )
-
-                # Очищаємо бакет для нового циклу
-                current_bucket = {}
-
-            # Додаємо метрику в поточний бакет
-            current_bucket[res] = val
-            last_ts = current_ts
-
-        # 3. Не забуваємо перевірити останній зібраний бакет після виходу з циклу
-        if (
-            "cpu" in current_bucket
-            and "ram" in current_bucket
-            and "rps" in current_bucket
-        ):
-            raw_values.append(
-                [current_bucket["cpu"], current_bucket["ram"], current_bucket["rps"]]
+        model_meta = await async_http_request(
+            method="GET",
+            url=f"{API_URL}/models/byversion/{cmd.target_version}",
+            response_model=ModelRead,
+        )
+        if model_meta is None:
+            await send_system_log(
+                f"❌ Не вдалося знайти модель {cmd.target_version} для донавчання",
+                level="ERROR",
+                service="lstm_module",
             )
-
-        raw_array = np.array(raw_values)
-
+            return
+        url = f"{API_URL}/metrics/history/range"
+        payload = MetricHistoryRangeRead(
+            start_time=cmd.start_time,
+            end_time=cmd.end_time,
+        )
+        history_data = await async_http_request(
+            method="GET",
+            url=url,
+            payload=payload,
+            response_model=list[MetricRead],  # Ми очікуємо список словників з полями
+        )
+        if history_data is None:
+            await send_system_log(
+                f"❌ Не вдалося завантажити дані для донавчання",
+                level="ERROR",
+                service="lstm_module",
+            )
+            return
+        raw_array = await prepare_finetune_data(history_data)
         if len(raw_array) < 50:
             await send_system_log(
                 f"❌ Замало повних даних для донавчання: {len(raw_array)} точок.",
@@ -95,17 +49,15 @@ async def run_finetune_pipeline(cmd: RetrainCommand) -> None:
                 service="lstm_module",
             )
             return
-
-        # 4. Передаємо все в ModelManager
         await send_system_log(
-            f"🚀 Запуск Fine-Tuning для {cmd.target_version} на {len(raw_values)} точках...",
+            f"🚀 Запуск Fine-Tuning для {cmd.target_version} на {len(raw_array)} точках...",
             level="INFO",
             service="lstm_module",
         )
         model_manager.fine_tune_specific(
             base_version=cmd.target_version,
-            model_path=model_meta["model_path"],
-            scaler_path=model_meta["scaler_path"],
+            model_path=model_meta.model_path,
+            scaler_path=model_meta.scaler_path,
             raw_data=raw_array,
             epochs=cmd.epochs,
             batch_size=cmd.batch_size,
@@ -116,3 +68,46 @@ async def run_finetune_pipeline(cmd: RetrainCommand) -> None:
             level="ERROR",
             service="lstm_module",
         )
+
+
+async def prepare_finetune_data(history_data: list[MetricRead]) -> np.ndarray:
+    history_data.sort(key=lambda x: x.ts)  # Сортуємо за часом
+
+    raw_values = []
+    current_bucket: Dict[str, float] = {}
+    last_ts = None
+
+    for item in history_data:
+        # 🌟 МАГІЯ ТУТ: Просто беремо готовий datetime об'єкт!
+        current_ts = item.ts
+
+        res = item.resource
+        val = item.actual_value
+
+        # Якщо це перша точка АБО з моменту минулої пройшло більше 2 секунд
+        if last_ts is None or (current_ts - last_ts).total_seconds() > 2.0:
+            if (
+                "cpu" in current_bucket
+                and "ram" in current_bucket
+                and "rps" in current_bucket
+            ):
+                raw_values.append(
+                    [
+                        current_bucket["cpu"],
+                        current_bucket["ram"],
+                        current_bucket["rps"],
+                    ]
+                )
+            current_bucket = {}
+
+        if val is not None:
+            current_bucket[res] = val
+
+        last_ts = current_ts
+
+    if "cpu" in current_bucket and "ram" in current_bucket and "rps" in current_bucket:
+        raw_values.append(
+            [current_bucket["cpu"], current_bucket["ram"], current_bucket["rps"]]
+        )
+
+    return np.array(raw_values)

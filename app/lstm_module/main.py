@@ -1,14 +1,16 @@
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-import aiohttp
 import uvicorn
 from api.routes import router  # type: ignore[attr-defined]
+from config import API_URL
 from core.config import settings
 from fastapi import FastAPI
-from logger.logger import send_system_log
-from lstm_module import API_URL, PORT
+from lstm_module import PORT
 from services.model_manager import model_manager
+from shared.logger import send_system_log
+from shared.schemas import ModelRead
+from shared.utils import async_http_request
 
 
 @asynccontextmanager
@@ -18,39 +20,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         level="INFO",
         service="lstm_module",
     )
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{API_URL}/models/active") as response:
-                if response.status == 200:
-                    data = await response.json()
-                    await send_system_log(
-                        f"📥 Знайдено активну модель: {data['version']}. Завантажуємо...",
-                        level="INFO",
-                        service="lstm_module",
-                    )
-
-                    model_manager.load_new_model(
-                        model_path=data["model_path"],
-                        scaler_path=data["scaler_path"],
-                        version=data["version"],
-                    )
-                else:
-                    await send_system_log(
-                        "⚠️ Активну модель не знайдено в БД. Працюємо на dummy-моделі.",
-                        level="WARNING",
-                        service="lstm_module",
-                    )
-    except aiohttp.ClientError as e:
+    data = await async_http_request(
+        method="GET", url=f"{API_URL}/models/active", response_model=ModelRead
+    )
+    if data is None:
         await send_system_log(
-            f"❌ Помилка зв'язку з API під час холодного старту: {e}. Працюємо на dummy-моделі.",
-            level="ERROR",
+            "⚠️ Активну модель не знайдено в БД. Працюємо на dummy-моделі.",
+            level="WARNING",
             service="lstm_module",
         )
-    except Exception as e:
+    else:
         await send_system_log(
-            f"❌ Несподівана помилка під час холодного старту: {e}.",
-            level="ERROR",
+            f"📥 Знайдено активну модель: {data.version}. Завантажуємо...",
+            level="INFO",
             service="lstm_module",
+        )
+        model_manager.load_new_model(
+            model_path=data.model_path,
+            scaler_path=data.scaler_path,
+            version=data.version,
         )
     yield
     await send_system_log(

@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends
+from shared.schemas import SettingsRead, SettingsUpdate
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..models import SystemSettings
-from ..schemas import SettingsRead, SettingsUpdate
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -15,15 +15,12 @@ async def get_settings(db: AsyncSession = Depends(get_db)) -> SettingsRead:
     query = select(SystemSettings).filter(SystemSettings.id == 1)
     result = await db.execute(query)
     settings = result.scalar_one_or_none()
-
-    # "Лінива ініціалізація": якщо таблиця пуста, створюємо перший рядок з дефолтними значеннями
     if not settings:
         settings = SystemSettings(id=1)
         db.add(settings)
         await db.commit()
         await db.refresh(settings)
-
-    return settings
+    return SettingsRead.model_validate(settings)
 
 
 @router.put("", response_model=SettingsRead)
@@ -47,4 +44,4 @@ async def update_settings(
     await db.commit()
     await db.refresh(settings)
 
-    return settings
+    return SettingsRead.model_validate(settings)

@@ -1,9 +1,10 @@
 import datetime
 import uuid
 
-import aiohttp
-from api import PREDICTOR_URL
-from logger.logger import send_system_log
+from config import PREDICTOR_URL
+from shared.logger import send_system_log
+from shared.schemas import GenericResponse, ReloadRequest
+from shared.utils import async_http_request
 
 
 async def notify_predictor_to_reload(
@@ -11,28 +12,27 @@ async def notify_predictor_to_reload(
 ) -> None:
     """Фонова задача: надсилає POST-запит до мікросервісу Предиктора"""
     try:
-        async with aiohttp.ClientSession() as session:
-            url = f"{PREDICTOR_URL}/reload"
-            payload = {
-                "version": version,
-                "model_path": model_path,
-                "scaler_path": scaler_path,
-            }
-
-            async with session.post(url, json=payload) as response:
-                if response.status == 200:
-                    await send_system_log(
-                        f"✅ Предиктор успішно отримав команду на Hot Swap до {version}",
-                        level="INFO",
-                        service="timescale_api",
-                    )
-                else:
-                    error_msg = await response.text()
-                    await send_system_log(
-                        f"❌ Предиктор повернув помилку {response.status}: {error_msg}",
-                        level="ERROR",
-                        service="timescale_api",
-                    )
+        request_object = ReloadRequest(
+            version=version, model_path=model_path, scaler_path=scaler_path
+        )
+        responce = await async_http_request(
+            method="POST",
+            url=f"{PREDICTOR_URL}/reload",
+            payload=request_object,
+            response_model=GenericResponse,
+        )
+        if responce:
+            await send_system_log(
+                f"✅ Предиктор успішно отримав команду на Hot Swap до {version}",
+                level="INFO",
+                service="timescale_api",
+            )
+        else:
+            await send_system_log(
+                f"❌ Предиктор повернув помилку при спробі Hot Swap до {version}: {responce.message}",
+                level="ERROR",
+                service="timescale_api",
+            )
     except Exception as e:
         await send_system_log(
             f"❌ Помилка з'єднання з Предиктором: {e}",

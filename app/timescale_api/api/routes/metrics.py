@@ -1,22 +1,28 @@
 import datetime
-from typing import Any, List, Optional, Sequence
 
 from fastapi import APIRouter, Depends
+from shared.schemas import (
+    GenericResponse,
+    MetricHistoryRangeRead,
+    MetricHistoryRead,
+    MetricRead,
+    PredictData,
+    SyncActualData,
+)
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from ..database import get_db
 from ..models import MetricEntry, ModelRegistry
-from ..schemas import MetricRead, PredictData, SyncActualData
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
 
 
-@router.put("/sync")
+@router.put("/sync", response_model=GenericResponse)
 async def sync_actual_values(
     data: SyncActualData, db: AsyncSession = Depends(get_db)
-) -> dict[str, str]:
+) -> GenericResponse:
     """
     [Internal] Оновлює actual_value для минулих прогнозів, час яких настав.
     Викликається Воркером.
@@ -33,7 +39,9 @@ async def sync_actual_values(
 
     await db.execute(stmt)
     await db.commit()
-    return {"status": "success", "message": f"Actual values synced for {data.resource}"}
+    return GenericResponse(
+        status="success", message=f"Actual values synced for {data.resource}"
+    )
 
 
 @router.post("/predict", response_model=MetricRead)
@@ -74,40 +82,40 @@ async def save_new_prediction(
     await db.commit()
     await db.refresh(new_entry)
 
-    return new_entry
+    return MetricRead.model_validate(new_entry)
 
 
-@router.get("/history", response_model=List[MetricRead])
+@router.get("/history", response_model=list[MetricRead])
 async def get_history(
-    resource: str, limit: int = 50, db: AsyncSession = Depends(get_db)
-) -> Sequence[MetricEntry]:
+    history_read: MetricHistoryRead, db: AsyncSession = Depends(get_db)
+) -> list[MetricRead]:
     """Повертає історію метрик для графіків (Дашборд / Grafana)."""
     query = (
         select(MetricEntry)
-        .filter(MetricEntry.resource == resource)
+        .filter(MetricEntry.resource == history_read.resource)
         .order_by(MetricEntry.ts.desc())
-        .limit(limit)
+        .limit(history_read.limit)
     )
     result = await db.execute(query)
-    return result.scalars().all()
+    orm_metrics = result.scalars().all()  # Це список об'єктів MetricEntry
+    return [MetricRead.model_validate(metric) for metric in orm_metrics]
 
 
-@router.get("/history/range")
+@router.get("/history/range", response_model=list[MetricRead])
 async def get_history_by_range(
-    start_time: datetime.datetime,
-    end_time: datetime.datetime,
-    resource: Optional[str] = None,  # Зробили опціональним
+    history_range_read: MetricHistoryRangeRead,
     db: AsyncSession = Depends(get_db),
-) -> Any:
+) -> list[MetricRead]:
     query = (
         select(MetricEntry)
         .filter(MetricEntry.actual_value.isnot(None))
-        .filter(MetricEntry.ts >= start_time)
-        .filter(MetricEntry.ts <= end_time)
+        .filter(MetricEntry.ts >= history_range_read.start_time)
+        .filter(MetricEntry.ts <= history_range_read.end_time)
         .order_by(MetricEntry.ts.asc())
     )
-    if resource:
-        query = query.filter(MetricEntry.resource == resource)
+    if history_range_read.resource:
+        query = query.filter(MetricEntry.resource == history_range_read.resource)
 
     result = await db.execute(query)
-    return result.scalars().all()
+    orm_metrics = result.scalars().all()  # Це список об'єктів MetricEntry
+    return [MetricRead.model_validate(metric) for metric in orm_metrics]

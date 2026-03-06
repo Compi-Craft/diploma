@@ -55,7 +55,7 @@ class SystemSettings(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
 
-    is_collector_active = Column(Boolean, default=True)
+    is_collector_active = Column(Boolean, default=False)
 
     prometheus_url = Column(
         String, default="http://host.docker.internal:9090/api/v1/query"
