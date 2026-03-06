@@ -5,6 +5,7 @@ import uuid
 from typing import Any
 
 import joblib
+import keras
 import numpy as np
 import requests
 import tensorflow as tf
@@ -47,7 +48,7 @@ class ModelManager:
         """Гаряча заміна моделі та скейлера (Hot Swap)"""
         try:
             # ДОДАЛИ compile=False ось тут 👇
-            new_model = tf.keras.models.load_model(model_path, compile=False)
+            new_model = keras.models.load_model(model_path, compile=False)
             new_scaler = joblib.load(scaler_path)
 
             # Атомарна заміна під локом
@@ -61,6 +62,11 @@ class ModelManager:
                 service="lstm_module",
             )
         except Exception as e:
+            send_system_log_sync(
+                f"❌ Помилка завантаження. Версія TF у контейнері: {tf.__version__}",
+                level="ERROR",
+                service="lstm_module",
+            )
             send_system_log_sync(
                 f"❌ Failed to load model {version}: {e}",
                 level="ERROR",
@@ -141,7 +147,7 @@ class ModelManager:
             new_version = f"{base_version[:10]}_tuned_{timestamp}-{short_hash}"
 
             base_dir = os.path.dirname(model_path)
-            new_model_path = os.path.join(base_dir, f"{new_version}.h5")
+            new_model_path = os.path.join(base_dir, f"{new_version}.keras")
             target_model.save(new_model_path)
 
             send_system_log_sync(

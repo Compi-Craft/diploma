@@ -29,11 +29,16 @@ async def sync_actual_values(
     """
     now = datetime.datetime.now(datetime.timezone.utc)
 
+    # Шукаємо записи, де target_ts знаходиться в межах +/- 5 секунд від часу виміру
     stmt = (
         update(MetricEntry)
         .where(MetricEntry.resource == data.resource)
-        .where(MetricEntry.actual_value == None)
-        .where(MetricEntry.target_ts <= now)
+        .where(MetricEntry.actual_value.is_(None))
+        .where(
+            MetricEntry.target_ts.between(
+                now - datetime.timedelta(seconds=5), now + datetime.timedelta(seconds=5)
+            )
+        )
         .values(actual_value=data.actual_value)
     )
 

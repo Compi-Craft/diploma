@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 service="timescale_api",
             )
             dummy_model = ModelRegistry(
-                model_path=f"{MODELS_DIR}/default.h5",
+                model_path=f"{MODELS_DIR}/default.keras",
                 scaler_path=f"{SCALERS_DIR}/default.pkl",
                 is_active=True,
                 mse=0.0,

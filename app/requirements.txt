@@ -6,7 +6,7 @@ pydantic
 pydantic-settings
 sqlalchemy
 asyncpg
-tensorflow-cpu
+tensorflow-cpu==2.20.0
 pandas
 numpy
 prometheus-api-client
@@ -19,3 +19,5 @@ aiohttp
 streamlit
 streamlit-autorefresh
 plotly
+matplotlib
+keras>=3.0.0

@@ -81,60 +81,61 @@ if page == "📈 Metrics":
             raw_dicts = [item.model_dump() for item in data]
             df = pd.DataFrame(raw_dicts)
             df["ts"] = pd.to_datetime(df["ts"])
-            df["target_ts"] = pd.to_datetime(df["target_ts"])
             df = df.sort_values("ts")
 
             fig = go.Figure()
 
-            # Actual measured values
+            # 1. Input Value — те, що зняли з датчика в момент ts
             fig.add_trace(
                 go.Scatter(
                     x=df["ts"],
                     y=df["input_value"],
-                    name="Actual",
-                    line=dict(color=actual_color, width=2),
+                    name="Input (Current)",
+                    line=dict(color=actual_color, width=3),
                     mode="lines+markers",
                     marker=dict(size=4),
                 )
             )
 
-            # Predicted values (plotted at measurement time for alignment)
+            # 2. Predicted Value — прогноз, зроблений в момент ts (на +60с вперед)
             fig.add_trace(
                 go.Scatter(
                     x=df["ts"],
                     y=df["predicted_value"],
-                    name="Predicted (next interval)",
+                    name="Predicted (for +60s)",
                     line=dict(color=pred_color, width=2, dash="dot"),
                     mode="lines+markers",
-                    marker=dict(size=4, symbol="diamond"),
+                    marker=dict(size=5, symbol="diamond"),
                 )
             )
 
-            # Retrospective actual values (filled in when target_ts is reached)
-            has_actual = df["actual_value"].notna()
-            if has_actual.any():
-                fig.add_trace(
-                    go.Scatter(
-                        x=df.loc[has_actual, "target_ts"],
-                        y=df.loc[has_actual, "actual_value"],
-                        name="Actual @ Target Time",
-                        line=dict(color=actual_color, width=1, dash="dash"),
-                        marker=dict(size=3),
-                        opacity=0.6,
-                    )
+            # 3. Actual Value — реальність, яка настала через 60с (записана ретроспективно)
+            # Використовуємо dropna, щоб лінія не переривалася на порожніх точках
+            df_actual = df.dropna(subset=["actual_value"])
+            fig.add_trace(
+                go.Scatter(
+                    x=df_actual["ts"],
+                    y=df_actual["actual_value"],
+                    name="Actual Result (Outcome)",
+                    line=dict(
+                        color="#FFD700", width=2, dash="dash"
+                    ),  # Золотистий колір для "істини"
+                    mode="lines+markers",
+                    marker=dict(size=4, symbol="circle-open"),
                 )
+            )
 
             fig.update_layout(
-                height=280,
-                margin=dict(l=0, r=0, t=10, b=0),
+                height=350,
+                margin=dict(l=0, r=0, t=30, b=0),
                 legend=dict(
-                    orientation="h",
+                    orientation="h",  # Горизонтальна орієнтація
                     yanchor="bottom",
-                    y=1.02,
-                    xanchor="left",
-                    x=0,
+                    y=1.02,  # Трохи вище самого графіка
+                    xanchor="left",  # 👈 Прив'язка до лівого краю легенди
+                    x=0,  # 👈 Координата 0 (самий лівий край)
                 ),
-                xaxis_title="Time",
+                xaxis_title="Time (ts)",
                 yaxis_title=label,
                 hovermode="x unified",
                 plot_bgcolor="rgba(0,0,0,0)",
@@ -226,18 +227,38 @@ elif page == "🗂️ Model Registry":
                 help="Select any model to activate it. Selecting the currently active model will force the Predictor to reload its files.",
             )
 
-            if st.button(f"✅ Activate / Reload **{selected}**", type="primary"):
-                with st.spinner(f"Sending reload signal for {selected}..."):
-                    # Звертаємося до нашого API
-                    result = sync_http_request(
-                        method="PUT",
-                        url=f"{API_URL}/models/{selected}/activate",
-                        response_model=GenericResponse,
-                    )
-                if result:
-                    st.success(result.message)
-                    time.sleep(1)
-                    st.rerun()
+            col1, col2 = st.columns(2)
+
+            # Кнопка 1: Активація (у першій колонці)
+            with col1:
+                if st.button(f"✅ Activate / Reload **{selected}**", type="primary"):
+                    with st.spinner(f"Sending reload signal for {selected}..."):
+                        # Звертаємося до нашого API
+                        result = sync_http_request(
+                            method="PUT",
+                            url=f"{API_URL}/models/{selected}/activate",
+                            response_model=GenericResponse,
+                        )
+                    if result:
+                        st.success(result.message)
+                        time.sleep(1)
+                        st.rerun()
+            with col2:
+                if st.button(f"📊 Evaluate Performance", use_container_width=True):
+                    with st.spinner(f"Calculating real MSE/MAE for {selected}..."):
+                        # Робимо POST запит на наш новий ендпоінт
+                        eval_result = sync_http_request(
+                            method="POST",
+                            url=f"{API_URL}/models/{selected}/evaluate",
+                            response_model=ModelRead,  # Ендпоінт повертає оновлену модель
+                        )
+                    if eval_result:
+                        st.success(
+                            f"Metrics updated! "
+                            f"MSE: {eval_result.mse:.4f} | MAE: {eval_result.mae:.4f}"
+                        )
+                        time.sleep(2)  # Даємо 2 секунди почитати результати
+                        st.rerun()
         else:
             st.info("ℹ️ No models registered yet.")
 
@@ -318,7 +339,7 @@ elif page == "🗂️ Model Registry":
 elif page == "📤 Upload Model":
     st.title("📤 Upload New Model")
     st.markdown(
-        "Upload a trained `.h5` Keras model and its `.pkl` scikit-learn scaler. "
+        "Upload a trained `.keras` Keras model and its `.pkl` scikit-learn scaler. "
         "Leave *Version* empty to auto-generate one."
     )
 
@@ -329,8 +350,8 @@ elif page == "📤 Upload Model":
         mae = col3.number_input("MAE", value=0.0, min_value=0.0, format="%.6f")
 
         model_file = st.file_uploader(
-            "Model file (.h5)",
-            type=["h5"],
+            "Model file (.keras)",
+            type=["keras"],
             help="Keras model exported with model.save()",
         )
         scaler_file = st.file_uploader(
@@ -345,7 +366,7 @@ elif page == "📤 Upload Model":
 
     if submitted:
         if not model_file or not scaler_file:
-            st.error("Both model (.h5) and scaler (.pkl) files are required.")
+            st.error("Both model (.keras) and scaler (.pkl) files are required.")
         else:
             with st.spinner("Uploading model..."):
                 files = {

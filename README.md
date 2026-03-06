@@ -111,7 +111,7 @@ Every 15 s:
 | `POST` | `/models` | Register a new model (JSON body) |
 | `GET` | `/models/active` | Get the currently active model (used by predictor on cold start) |
 | `PUT` | `/models/{version}/activate` | Activate a model and trigger hot-swap in the predictor |
-| `POST` | `/models/upload` | Upload `.h5` model + `.pkl` scaler via multipart form |
+| `POST` | `/models/upload` | Upload `.keras` model + `.pkl` scaler via multipart form |
 
 #### Settings
 
@@ -142,7 +142,7 @@ Every 15 s:
 
 ### Cold Start
 
-On startup the LSTM Predictor calls `GET /models/active` on the TimescaleAPI. If a model is found it loads the `.h5` + `.pkl` files from the shared volume. If no model is registered it falls back to a dummy (zeros) model until a real one is activated.
+On startup the LSTM Predictor calls `GET /models/active` on the TimescaleAPI. If a model is found it loads the `.keras` + `.pkl` files from the shared volume. If no model is registered it falls back to a dummy (zeros) model until a real one is activated.
 
 ### Hot Swap
 
@@ -155,7 +155,7 @@ Activating a model via the Dashboard or `PUT /models/{version}/activate`:
 ### Uploading a Custom Model
 
 Via the Dashboard → **📤 Upload Model**:
-- Upload a Keras `.h5` model and a scikit-learn `.pkl` scaler.
+- Upload a Keras `.keras` model and a scikit-learn `.pkl` scaler.
 - Optionally supply a version string, MSE and MAE metrics.
 - Files are saved to the shared volume; a registry record is created.
 - Activate the uploaded model from the **🗂️ Model Registry** page.
@@ -166,7 +166,7 @@ Via the Dashboard → **📤 Upload Model**:
 1. Collect data from /metrics/history (or use your own dataset)
 2. Train an LSTM: input shape (batch, 10, 3), output shape (batch, 3)
 3. Fit a StandardScaler on the training data, save with joblib.dump()
-4. Save the Keras model with model.save("model.h5")
+4. Save the Keras model with model.save("model.keras")
 5. Upload via Dashboard → Upload Model
 6. Activate via Dashboard → Model Registry → Activate
 ```
@@ -223,7 +223,7 @@ Configurable refresh interval (5–60 s) and history window (20–300 points) fr
 
 **🗂️ Model Registry** — Table of all registered models with version, status, MSE, MAE, created date. Supports one-click model activation.
 
-**📤 Upload Model** — Form to upload a `.h5` Keras model and `.pkl` scaler with optional version string and metrics.
+**📤 Upload Model** — Form to upload a `.keras` Keras model and `.pkl` scaler with optional version string and metrics.
 
 **⚙️ Settings** — Edit Prometheus URL, PromQL queries for each resource, and toggle the collector on/off.
 
@@ -304,7 +304,7 @@ diploma/
 │   │       └── api_client.py   # TimescaleAPI client
 │   ├── dashboard/
 │   │   └── app.py              # Streamlit dashboard (4 pages)
-│   ├── ml_models/              # Default LSTM model (.h5)
+│   ├── ml_models/              # Default LSTM model (.keras)
 │   ├── scalers/                # Default scaler (.pkl)
 │   ├── requirements.txt
 │   └── Dockerfile

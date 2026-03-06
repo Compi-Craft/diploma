@@ -8,12 +8,14 @@ from fastapi import (
     Depends,
     HTTPException,
 )
+from shared.logger import send_system_log
 from shared.schemas import GenericResponse, ModelCreate, ModelRead, ModelUploadRequest
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Mapped, mapped_column
 
 from ..database import get_db
-from ..models import ModelRegistry
+from ..models import MetricEntry, ModelRegistry
 from ..utils import generate_model_version, notify_predictor_to_reload
 
 router = APIRouter(prefix="/models", tags=["models"])
@@ -112,9 +114,9 @@ async def upload_custom_model(
 
     # 1. Перевіряємо формати
     if not form_data.model_file.filename or not form_data.model_file.filename.endswith(
-        ".h5"
+        ".keras"
     ):
-        raise HTTPException(status_code=400, detail="Модель має бути формату .h5")
+        raise HTTPException(status_code=400, detail="Модель має бути формату .keras")
     if (
         not form_data.scaler_file.filename
         or not form_data.scaler_file.filename.endswith(".pkl")
@@ -165,3 +167,63 @@ async def get_active_model(db: AsyncSession = Depends(get_db)) -> ModelRead:
         raise HTTPException(status_code=404, detail="Активну модель не знайдено")
 
     return ModelRead.model_validate(active_model)
+
+
+@router.post("/{version}/evaluate", response_model=ModelRead)
+async def evaluate_real_performance(
+    version: str, db: AsyncSession = Depends(get_db)
+) -> ModelRead:
+    """
+    Бере історичні прогнози моделі, порівнює їх з реальними даними
+    і оновлює MSE та MAE у реєстрі моделей.
+    """
+
+    # 1. Знаходимо модель
+    query_model = select(ModelRegistry).where(ModelRegistry.version == version)
+    result_model = await db.execute(query_model)
+    model_obj = result_model.scalar_one_or_none()
+
+    if not model_obj:
+        raise HTTPException(status_code=404, detail=f"Модель {version} не знайдена")
+
+    # 2. Рахуємо метрики засобами бази даних (найшвидший шлях)
+    # Змінна для зручності: різниця між реальністю та прогнозом
+    diff = MetricEntry.actual_value - MetricEntry.predicted_value
+
+    query_metrics = select(
+        # MSE = середнє від (різниця в квадраті)
+        func.avg(diff * diff).label("real_mse"),
+        # MAE = середнє від (абсолютна різниця)
+        func.avg(func.abs(diff)).label("real_mae"),
+    ).where(
+        MetricEntry.model_version == version,
+        # Обов'язково беремо тільки ті записи, де реальність вже настала!
+        MetricEntry.actual_value.is_not(None),
+        MetricEntry.predicted_value.is_not(None),
+    )
+
+    result_metrics = await db.execute(query_metrics)
+    metrics_row = result_metrics.one()
+
+    # Якщо для моделі ще не зібралися реальні дані (всі actual_value = None)
+    if metrics_row.real_mse is None or metrics_row.real_mae is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Немає достатньо реальних даних для оцінки цієї моделі.",
+        )
+
+    # 3. Оновлюємо запис моделі новими "бойовими" метриками
+    model_obj.mse = float(metrics_row.real_mse)  # type: ignore[assignment]
+    model_obj.mae = float(metrics_row.real_mae)  # type: ignore[assignment]
+
+    await db.commit()
+    await db.refresh(model_obj)
+
+    # Можемо також залогувати успіх
+    await send_system_log(
+        f"📊 Оновлено метрики для {version}: MSE={model_obj.mse:.4f}, MAE={model_obj.mae:.4f}",
+        level="INFO",
+        service="timescale_api",
+    )
+
+    return ModelRead.model_validate(model_obj)
