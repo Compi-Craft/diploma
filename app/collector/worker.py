@@ -9,32 +9,35 @@ from shared.schemas import SettingsRead
 from .services import api_client, prometheus
 
 # --- Оголошуємо наші метрики ---
+# УВАГА: Якщо у тебе в Grafana графіки шукають "lstm_predicted...", 
+# тобі треба буде оновити PromQL запити на "gru_predicted..."
 PREDICTED_CPU = Gauge(
-    "lstm_predicted_cpu_cores", "Predicted CPU usage in cores for the next window"
+    "gru_predicted_cpu_cores", "Predicted CPU usage in cores for the next window (GRU)"
 )
-PREDICTED_RAM = Gauge("lstm_predicted_ram_mb", "Predicted RAM usage in MB")
-PREDICTED_RPS = Gauge("lstm_predicted_rps", "Predicted Requests Per Second")
+PREDICTED_RAM = Gauge("gru_predicted_ram_mb", "Predicted RAM usage in MB (GRU)")
+PREDICTED_RPS = Gauge("gru_predicted_rps", "Predicted Requests Per Second (GRU)")
 # -------------------------------------
 
 is_busy = False
-history_buffer: Deque[Dict[str, float]] = deque(maxlen=10)
+# 💡 ЗМІНА 1: Тепер буфер зберігає 11 точок (1 поточна + 10 для розрахунку прискорення)
+history_buffer: Deque[Dict[str, float]] = deque(maxlen=11)
 
 
 async def restore_history_buffer() -> None:
-    """Відновлює останні 10 точок з бази даних для швидкого старту LSTM."""
+    """Відновлює останні 11 точок з бази даних для швидкого старту GRU."""
     await send_system_log(
         "🔄 Спроба відновити історію з БД для швидкого старту...",
         level="INFO",
         service="collector",
     )
     try:
-        # 1. Отримуємо останні 10 записів
-        cpu_data = await api_client.get_recent_history("cpu", limit=10)
-        ram_data = await api_client.get_recent_history("ram", limit=10)
-        rps_data = await api_client.get_recent_history("rps", limit=10)
+        # 💡 ЗМІНА 2: Запитуємо 11 точок з БД
+        cpu_data = await api_client.get_recent_history("cpu", limit=11)
+        ram_data = await api_client.get_recent_history("ram", limit=11)
+        rps_data = await api_client.get_recent_history("rps", limit=11)
 
         # 2. API зазвичай повертає найновіші першими (DESC сортування).
-        # Але для LSTM критично важливий хронологічний порядок (від старого до нового).
+        # Але для GRU критично важливий хронологічний порядок (від старого до нового).
         cpu_data.reverse()
         ram_data.reverse()
         rps_data.reverse()
@@ -63,7 +66,8 @@ async def restore_history_buffer() -> None:
             history_buffer.append(point)
 
         if min_len > 0:
-            msg = f"✅ Буфер відновлено! Завантажено {min_len}/10 точок з БД."
+            # 💡 ЗМІНА 3: Логуємо 11 точок
+            msg = f"✅ Буфер відновлено! Завантажено {min_len}/11 точок з БД."
             await api_client.send_system_log(msg, "INFO", "collector")
         else:
             await api_client.send_system_log(
@@ -161,8 +165,8 @@ async def process_metrics_task(sys_settings: SettingsRead) -> None:
             service="collector",
         )
 
-        # 4. Якщо є 10 точок - робимо прогноз
-        if len(history_buffer) == 10:
+        # 💡 ЗМІНА 4: Робимо прогноз ТІЛЬКИ коли зібрано 11 точок
+        if len(history_buffer) == 11:
             payload = list(history_buffer)
             predictions = await api_client.get_prediction(payload)
 
@@ -189,7 +193,8 @@ async def process_metrics_task(sys_settings: SettingsRead) -> None:
                 )
         else:
             await send_system_log(
-                f"   ⏳ Накопичення історії: {len(history_buffer)}/10. Прогноз пропускаємо.",
+                # 💡 ЗМІНА 5: Логіка очікування до 11 точок
+                f"   ⏳ Накопичення історії: {len(history_buffer)}/11. Прогноз пропускаємо.",
                 level="INFO",
                 service="collector",
             )

@@ -44,7 +44,8 @@ class ModelRegistry(Base):
 
     # Шляхи до файлів у Docker-контейнері
     model_path = Column(String, nullable=False)
-    scaler_path = Column(String, nullable=False)
+    scaler_x_path = Column(String, nullable=False)
+    scaler_y_path = Column(String, nullable=False)
 
     # Статуси
     is_active = Column(Boolean, default=False)

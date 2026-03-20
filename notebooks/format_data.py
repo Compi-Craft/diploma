@@ -48,7 +48,7 @@ def prepare_dataset(raw_csv_path: str, output_csv_path: str) -> None:
 
 if __name__ == "__main__":
     # Назви файлів
-    RAW_FILE = "./raw_data/raw_metrics.csv"  # Файл, який ти скачав з pgAdmin
-    CLEAN_FILE = "./clean_data/training_data.csv"  # Файл, який ми віддамо нейромережі
+    RAW_FILE = "./raw_data/raw_data_2.csv"  # Файл, який ти скачав з pgAdmin
+    CLEAN_FILE = "./clean_data/train_data_2.csv"  # Файл, який ми віддамо нейромережі
 
     prepare_dataset(RAW_FILE, CLEAN_FILE)

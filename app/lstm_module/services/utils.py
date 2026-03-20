@@ -57,7 +57,8 @@ async def run_finetune_pipeline(cmd: RetrainCommand) -> None:
         model_manager.fine_tune_specific(
             base_version=cmd.target_version,
             model_path=model_meta.model_path,
-            scaler_path=model_meta.scaler_path,
+            scaler_X_path=model_meta.scaler_x_path,
+            scaler_y_path=model_meta.scaler_y_path,
             raw_data=raw_array,
             epochs=cmd.epochs,
             batch_size=cmd.batch_size,

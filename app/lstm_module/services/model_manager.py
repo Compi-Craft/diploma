@@ -1,12 +1,14 @@
 import datetime
+import joblib # 💡 ЗМІНА: Використовуємо joblib для скейлерів, як в нашому Jupyter
 import os
 import threading
 import uuid
+import pickle # 💡 ЗМІНА: Використовуємо pickle, як в нашому Jupyter
 from typing import Any
 
-import joblib
 import keras
 import numpy as np
+import pandas as pd # 💡 Додано для зручного Rolling Max у fine_tune
 import requests
 import tensorflow as tf
 from config import API_URL
@@ -17,191 +19,182 @@ from sklearn.preprocessing import StandardScaler
 
 class ModelManager:
     def __init__(self) -> None:
-        # Ініціалізуємо "пустишки"
-        self.scaler = self._create_dummy_scaler()
+        # 💡 ЗМІНА: Створюємо два РІЗНИХ dummy-скейлери
+        self.scaler_X = self._create_dummy_scaler_X()
+        self.scaler_y = self._create_dummy_scaler_y()
         self.model = self._create_dummy_model()
-        self.version = "v0-dummy"
+        self.version = "v0-dummy-sniper"
         self._lock = threading.Lock()
+        self.epsilon = 1e-6
 
-    def _create_dummy_scaler(self) -> StandardScaler:
-        """Створює пустий скейлер, щоб API не падало до завантаження реальної моделі"""
+    def _create_dummy_scaler_X(self) -> StandardScaler:
+        """Скейлер для 3 фічей (Історія)"""
         scaler = StandardScaler()
-        # Фіктивно "навчаємо" його на нулях та одиницях, щоб він просто пропускав дані
         scaler.fit([[0, 0, 0], [1, 1, 1]])
         return scaler
 
+    def _create_dummy_scaler_y(self) -> StandardScaler:
+        """Скейлер для 1 фічі (Таргет CPU)"""
+        scaler = StandardScaler()
+        scaler.fit([[0], [1]])
+        return scaler
+
     def _create_dummy_model(self) -> Any:
-        """Створює пусту LSTM модель для старту"""
-        model = tf.keras.Sequential(
-            [
-                tf.keras.layers.LSTM(
-                    16,
-                    input_shape=(settings.MODEL_INPUT_STEPS, settings.MODEL_FEATURES),
-                ),
-                tf.keras.layers.Dense(settings.MODEL_FEATURES),
-            ]
-        )
-        model.compile(optimizer="adam", loss="mse")
+        """Створює пусту Снайперську модель для старту"""
+        model = tf.keras.Sequential([
+            tf.keras.layers.GRU(
+                96, 
+                input_shape=(settings.MODEL_INPUT_STEPS, settings.MODEL_FEATURES),
+            ),
+            tf.keras.layers.Dropout(0.2),
+            tf.keras.layers.Dense(1), # 💡 ЗМІНА: Тільки 1 вихід (CPU)
+        ])
+        model.compile(optimizer="adam", loss="mae") # 💡 ЗМІНА: loss="mae"
         return model
 
-    def load_new_model(self, model_path: str, scaler_path: str, version: str) -> None:
-        """Гаряча заміна моделі та скейлера (Hot Swap)"""
+    def load_new_model(self, model_path: str, scaler_X_path: str, scaler_y_path: str, version: str) -> None:
+        """Гаряча заміна моделі та обох скейлерів (Hot Swap)"""
         try:
-            # ДОДАЛИ compile=False ось тут 👇
             new_model = keras.models.load_model(model_path, compile=False)
-            new_scaler = joblib.load(scaler_path)
+            
+            # 💡 ЗМІНА: Використовуємо pickle замість joblib
+            new_scaler_X = joblib.load(scaler_X_path)
+            new_scaler_y = joblib.load(scaler_y_path)
 
-            # Атомарна заміна під локом
             with self._lock:
                 self.model = new_model
-                self.scaler = new_scaler
+                self.scaler_X = new_scaler_X
+                self.scaler_y = new_scaler_y
                 self.version = version
+                
             send_system_log_sync(
-                f"✅ Model and Scaler successfully updated to {version}",
+                f"✅ Sniper Model and Scalers successfully updated to {version}",
                 level="INFO",
                 service="lstm_module",
             )
         except Exception as e:
-            send_system_log_sync(
-                f"❌ Помилка завантаження. Версія TF у контейнері: {tf.__version__}",
-                level="ERROR",
-                service="lstm_module",
-            )
-            send_system_log_sync(
-                f"❌ Failed to load model {version}: {e}",
-                level="ERROR",
-                service="lstm_module",
-            )
+            send_system_log_sync(f"❌ Failed to load model {version}: {e}", level="ERROR", service="lstm_module")
 
-    def predict(self, data: np.ndarray) -> np.ndarray:
-        """
-        data має розмірність (1, 10, 3) - один батч, 10 кроків, 3 фічі.
-        Scaler від scikit-learn вміє працювати тільки з 2D масивами.
-        Тому ми маємо змінити форму, відмасштабувати, і повернути назад.
-        """
+    def predict(self, raw_data: np.ndarray) -> np.ndarray:
         with self._lock:
-            # 1. Витягуємо наші 10 точок у 2D масив: форма стає (10, 3)
-            flat_data = data[0]
+            # 1. Витягуємо сирі дані: форма (11, 3)
+            flat_raw = raw_data[0]
+            
+            # Запам'ятовуємо останнє абсолютне значення
+            last_absolute_values = flat_raw[-1]
+            current_cpu = last_absolute_values[0]
+            current_ram = last_absolute_values[1]
+            current_rps = last_absolute_values[2]
 
-            # 2. Нормалізуємо вхідні дані
-            scaled_flat_data = self.scaler.transform(flat_data)
+            # 2. Розраховуємо Log Returns: отримуємо (10, 3)
+            log_returns = np.log((flat_raw[1:] + self.epsilon) / (flat_raw[:-1] + self.epsilon))
 
-            # 3. Повертаємо у 3D форму для LSTM: (1, 10, 3)
-            scaled_data = np.array([scaled_flat_data])
+            # 3. Нормалізуємо (Scaler X)
+            scaled_X = self.scaler_X.transform(log_returns)
+            model_input = np.array([scaled_X])
 
-            # 4. Робимо прогноз (результат буде мати форму (1, 3))
-            prediction_scaled = self.model.predict(scaled_data, verbose=0)
+            # 4. Прогноз (відмасштабований Log Return ТІЛЬКИ для CPU)
+            prediction_scaled = self.model.predict(model_input, verbose=0)
 
-            # 5. Робимо зворотне перетворення (Inverse Transform) у реальні значення
-            prediction_real: np.ndarray = np.array(
-                self.scaler.inverse_transform(prediction_scaled)
-            )
+            # 5. Розпаковка (Scaler y)
+            prediction_log_return = self.scaler_y.inverse_transform(prediction_scaled)[0][0]
 
-            return prediction_real
+            # 6. Математика: Отримуємо майбутній пік процесора
+            pred_cpu = current_cpu * np.exp(prediction_log_return)
+
+            # 7. 💡 ЗАГЛУШКА: Формуємо масив з 3 елементів для сумісності з API
+            # CPU = Прогноз моделі. RAM та RPS = Поточні значення.
+            return np.array([[pred_cpu, current_ram, current_rps]])
 
     def fine_tune_specific(
         self,
         base_version: str,
         model_path: str,
-        scaler_path: str,
+        scaler_X_path: str,
+        scaler_y_path: str,
         raw_data: np.ndarray,
         epochs: int,
         batch_size: int,
     ) -> None:
-        """Завантажує конкретну модель, донавчає її та публікує нову версію."""
+        """Завантажує модель, донавчає її на логарифмах (Rolling Max) та публікує."""
         try:
-            # 1. Завантажуємо модель і скейлер з диска (не чіпаючи активну в пам'яті!)
             target_model = tf.keras.models.load_model(model_path, compile=False)
-            target_scaler = joblib.load(scaler_path)
 
-            # 2. Підготовка даних (Data Prep)
-            scaled_data = target_scaler.transform(raw_data)
+            target_scaler_X = joblib.load(scaler_X_path)
+            target_scaler_y = joblib.load(scaler_y_path)
 
+            # 💡 ЗМІНА: Використовуємо Pandas для простого прорахунку Rolling Max
+            df = pd.DataFrame(raw_data, columns=['cpu', 'ram', 'rps'])
+            horizon = 4
+            lookback = settings.MODEL_INPUT_STEPS # 10
+            
+            # X: Log Returns
+            log_returns_df = pd.DataFrame()
+            for col in ['cpu', 'ram', 'rps']:
+                log_returns_df[col] = np.log((df[col] + self.epsilon) / (df[col].shift(1) + self.epsilon))
+                
+            # Y: Rolling Max для CPU
+            future_peak = df['cpu'].rolling(window=horizon).max().shift(-horizon)
+            target_y_series = np.log((future_peak + self.epsilon) / (df['cpu'] + self.epsilon))
+
+            # Видаляємо NaN
+            valid_idx = target_y_series.dropna().index.intersection(log_returns_df.dropna().index)
+            log_returns = log_returns_df.loc[valid_idx].values
+            target_y = target_y_series.loc[valid_idx].values.reshape(-1, 1)
+
+            # Масштабуємо
+            scaled_X = target_scaler_X.transform(log_returns)
+            scaled_y = target_scaler_y.transform(target_y)
+
+            # Нарізаємо вікна
             X_train, y_train = [], []
-            lookback = 10  # Твій history_buffer size
+            for i in range(len(scaled_X) - lookback + 1):
+                X_train.append(scaled_X[i : i + lookback])
+                y_train.append(scaled_y[i + lookback - 1])
 
-            for i in range(len(scaled_data) - lookback):
-                X_train.append(scaled_data[i : i + lookback])
-                y_train.append(scaled_data[i + lookback])
+            X_train, y_train = np.array(X_train), np.array(y_train)
 
-            X_train, y_train = np.array(X_train), np.array(y_train)  # type: ignore[assignment]
-
-            # 3. Компілюємо з низьким learning rate для fine-tuning
             optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
-            target_model.compile(optimizer=optimizer, loss="mse", metrics=["mae"])
+            target_model.compile(optimizer=optimizer, loss="mae", metrics=["mae"])
 
-            # 4. Навчаємо
-            history = target_model.fit(
-                X_train, y_train, epochs=epochs, batch_size=batch_size, verbose=1
-            )
+            history = target_model.fit(X_train, y_train, epochs=epochs, batch_size=batch_size, verbose=1)
 
-            final_mse = float(history.history["loss"][-1])
             final_mae = float(history.history["mae"][-1])
 
-            # 5. Генеруємо ім'я та зберігаємо
-            timestamp = datetime.datetime.now(datetime.timezone.utc).strftime(
-                "%Y%m%d-%H%M%S"
-            )
+            timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
             short_hash = uuid.uuid4().hex[:4]
-            # Вказуємо, від якої моделі вона пішла (напр. v1.0_tuned_v2026...)
             new_version = f"{base_version[:10]}_tuned_{timestamp}-{short_hash}"
 
             base_dir = os.path.dirname(model_path)
             new_model_path = os.path.join(base_dir, f"{new_version}.keras")
             target_model.save(new_model_path)
 
-            send_system_log_sync(
-                f"✅ Fine-tuning завершено. Збережено як {new_version}",
-                level="INFO",
-                service="lstm_module",
-            )
+            send_system_log_sync(f"✅ Fine-tuning (Sniper) завершено. {new_version}", level="INFO", service="lstm_module")
 
-            # 6. Відправляємо в БД
-            self._sync_publish_new_model(
-                new_version, final_mse, final_mae, new_model_path, scaler_path
-            )
+            self._sync_publish_new_model(new_version, final_mae, final_mae, new_model_path, scaler_X_path, scaler_y_path)
 
         except Exception as e:
-            send_system_log_sync(
-                f"❌ Помилка під час fine-tuning моделі {base_version}: {e}",
-                level="ERROR",
-                service="lstm_module",
-            )
+            send_system_log_sync(f"❌ Помилка під час fine-tuning: {e}", level="ERROR", service="lstm_module")
 
     def _sync_publish_new_model(
-        self, version: str, mse: float, mae: float, model_path: str, scaler_path: str
+        self, version: str, mse: float, mae: float, model_path: str, scaler_X_path: str, scaler_y_path: str
     ) -> None:
-        """Оскільки ми вже в окремому потоці (завдяки BackgroundTasks), можемо використовувати синхронний запит або asyncio.run"""
         payload = {
             "version": version,
             "mse": mse,
             "mae": mae,
             "model_path": model_path,
-            "scaler_path": scaler_path,
+            "scaler_x_path": scaler_X_path,
+            "scaler_y_path": scaler_y_path,
             "is_active": False,
         }
         try:
-            # Зміни URL на адресу твого API
             resp = requests.post(f"{API_URL}/models", json=payload)
             if resp.status_code == 200:
-                send_system_log_sync(
-                    f"📡 Модель {version} успішно опублікована в БД!",
-                    level="INFO",
-                    service="lstm_module",
-                )
+                send_system_log_sync(f"📡 Модель {version} опублікована!", level="INFO", service="lstm_module")
             else:
-                send_system_log_sync(
-                    f"⚠️ Помилка публікації: {resp.text}",
-                    level="ERROR",
-                    service="lstm_module",
-                )
+                send_system_log_sync(f"⚠️ Помилка публікації: {resp.text}", level="ERROR", service="lstm_module")
         except Exception as e:
-            send_system_log_sync(
-                f"❌ Не вдалося достукатись до API для публікації: {e}",
-                level="ERROR",
-                service="lstm_module",
-            )
+            pass
 
-
-# Створюємо єдиний екземпляр
 model_manager = ModelManager()

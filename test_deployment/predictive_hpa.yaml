@@ -1,0 +1,34 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: podinfo-predictive-scaler
+  namespace: default
+spec:
+  scaleTargetRef:
+    name: podinfo # Ім'я твого деплойменту
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  cooldownPeriod: 60 # Захист від флаппінгу
+  advanced:
+    restoreToOriginalReplicaCount: true
+  triggers:
+  
+  # ---------------------------------------------------------
+  # 1. ПРОАКТИВНИЙ ТРИГЕР (Мозок / Штучний інтелект)
+  # ---------------------------------------------------------
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus-kube-prometheus-prometheus.default.svc.cluster.local:9090
+      metricName: gru_predicted_cpu_cores
+      query: max(gru_predicted_cpu_cores)
+      # 💡 Поріг прогнозу (наприклад, 0.15 ядра, як ми говорили раніше)
+      threshold: '0.05' 
+
+  # ---------------------------------------------------------
+  # 2. РЕАКТИВНИЙ ТРИГЕР (Рятівне коло / Базовий K8s)
+  # ---------------------------------------------------------
+  - type: cpu
+    metricType: Utilization
+    metadata:
+      # 💡 Скейлити, якщо РЕАЛЬНИЙ процесор перевищив 60% від ліміту (resources.requests.cpu)
+      value: "60"

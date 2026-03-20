@@ -37,7 +37,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         model_manager.load_new_model(
             model_path=data.model_path,
-            scaler_path=data.scaler_path,
+            scaler_X_path=data.scaler_x_path,
+            scaler_y_path=data.scaler_y_path,
             version=data.version,
         )
     yield

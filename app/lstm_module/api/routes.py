@@ -18,10 +18,10 @@ router = APIRouter()
 
 @router.post("/predict", response_model=PredictionResponse)
 async def predict(request: PredictionRequest) -> PredictionResponse:
-    if len(request.history) != settings.MODEL_INPUT_STEPS:
+    if len(request.history) != settings.MODEL_INPUT_STEPS + 1:
         raise HTTPException(
             status_code=400,
-            detail=f"Need exactly {settings.MODEL_INPUT_STEPS} historical points",
+            detail=f"Need exactly {settings.MODEL_INPUT_STEPS + 1} historical points",
         )
 
     # Конвертуємо Pydantic об'єкти в NumPy масив: shape (1, 10, 3)
@@ -48,7 +48,8 @@ async def reload_model(
         background_tasks.add_task(
             model_manager.load_new_model,
             request.model_path,
-            request.scaler_path,
+            request.scaler_x_path,
+            request.scaler_y_path,
             request.version,
         )
         return GenericResponse(message=f"Reloading started for {request.version}")

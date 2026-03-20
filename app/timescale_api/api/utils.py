@@ -8,12 +8,12 @@ from shared.utils import async_http_request
 
 
 async def notify_predictor_to_reload(
-    version: str, model_path: str, scaler_path: str
+    version: str, model_path: str, scaler_x_path: str, scaler_y_path: str
 ) -> None:
     """Фонова задача: надсилає POST-запит до мікросервісу Предиктора"""
     try:
         request_object = ReloadRequest(
-            version=version, model_path=model_path, scaler_path=scaler_path
+            version=version, model_path=model_path, scaler_x_path=scaler_x_path, scaler_y_path=scaler_y_path
         )
         responce = await async_http_request(
             method="POST",

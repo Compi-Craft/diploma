@@ -27,7 +27,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-
 # ── Sidebar navigation ────────────────────────────────────────────────────────
 
 st.sidebar.title("🤖 LPA Dashboard")
@@ -44,21 +43,18 @@ page = st.sidebar.radio(
 if page == "📈 Metrics":
     st.title("📈 Real-time Metrics")
     st.sidebar.markdown("### Chart options")
-    # 1. Додаємо перемикач (за замовчуванням увімкнений)
     auto_refresh_enabled = st.sidebar.toggle("🔄 Auto-refresh", value=True)
 
-    # 2. Повзунок інтервалу стає неактивним, якщо перемикач вимкнено
     refresh_interval = st.sidebar.slider(
         "Refresh interval (sec)",
         5,
         60,
         15,
-        disabled=not auto_refresh_enabled,  # 👈 Магія UX
+        disabled=not auto_refresh_enabled,
     )
 
     limit = st.sidebar.slider("History points", 20, 300, 100)
 
-    # 3. Викликаємо функцію оновлення ТІЛЬКИ якщо перемикач активний
     if auto_refresh_enabled:
         st_autorefresh(interval=refresh_interval * 1000, key="metrics_refresh")
 
@@ -85,7 +81,6 @@ if page == "📈 Metrics":
 
             fig = go.Figure()
 
-            # 1. Input Value — те, що зняли з датчика в момент ts
             fig.add_trace(
                 go.Scatter(
                     x=df["ts"],
@@ -97,7 +92,6 @@ if page == "📈 Metrics":
                 )
             )
 
-            # 2. Predicted Value — прогноз, зроблений в момент ts (на +60с вперед)
             fig.add_trace(
                 go.Scatter(
                     x=df["ts"],
@@ -109,17 +103,13 @@ if page == "📈 Metrics":
                 )
             )
 
-            # 3. Actual Value — реальність, яка настала через 60с (записана ретроспективно)
-            # Використовуємо dropna, щоб лінія не переривалася на порожніх точках
             df_actual = df.dropna(subset=["actual_value"])
             fig.add_trace(
                 go.Scatter(
                     x=df_actual["ts"],
                     y=df_actual["actual_value"],
                     name="Actual Result (Outcome)",
-                    line=dict(
-                        color="#FFD700", width=2, dash="dash"
-                    ),  # Золотистий колір для "істини"
+                    line=dict(color="#FFD700", width=2, dash="dash"),
                     mode="lines+markers",
                     marker=dict(size=4, symbol="circle-open"),
                 )
@@ -129,11 +119,11 @@ if page == "📈 Metrics":
                 height=350,
                 margin=dict(l=0, r=0, t=30, b=0),
                 legend=dict(
-                    orientation="h",  # Горизонтальна орієнтація
+                    orientation="h",
                     yanchor="bottom",
-                    y=1.02,  # Трохи вище самого графіка
-                    xanchor="left",  # 👈 Прив'язка до лівого краю легенди
-                    x=0,  # 👈 Координата 0 (самий лівий край)
+                    y=1.02,
+                    xanchor="left",
+                    x=0,
                 ),
                 xaxis_title="Time (ts)",
                 yaxis_title=label,
@@ -167,7 +157,6 @@ elif page == "🗂️ Model Registry":
         raw_dicts = [model.model_dump() for model in models]
         df = pd.DataFrame(raw_dicts)
 
-        # Format columns for display
         df["created_at"] = pd.to_datetime(df["created_at"]).dt.strftime(
             "%Y-%m-%d %H:%M"
         )
@@ -193,7 +182,6 @@ elif page == "🗂️ Model Registry":
 
         st.divider()
 
-        # Active model info
         active_models = [m for m in models if m.is_active]
         if active_models:
             active = active_models[0]
@@ -203,17 +191,15 @@ elif page == "🗂️ Model Registry":
             col2.metric("MSE", f"{active.mse:.6f}" if active.mse is not None else "—")
             col3.metric("MAE", f"{active.mae:.6f}" if active.mae is not None else "—")
             with st.expander("File paths"):
-                st.code(f"Model:  {active.model_path}\nScaler: {active.scaler_path}")
+                # 💡 Оновлено: тепер показуємо обидва скейлери
+                st.code(f"Model:    {active.model_path}\nScaler X: {active.scaler_x_path}\nScaler y: {active.scaler_y_path}")
 
-        # Activate a different model
         st.divider()
         st.subheader("🔄 Activate / Reload Model")
 
-        # Беремо абсолютно всі версії, незалежно від їхнього статусу
         all_versions = [m.version for m in models]
 
         if all_versions:
-            # Знаходимо індекс поточної активної моделі, щоб вона була вибрана за замовчуванням
             active_index = 0
             for i, m in enumerate(models):
                 if m.is_active:
@@ -229,11 +215,9 @@ elif page == "🗂️ Model Registry":
 
             col1, col2 = st.columns(2)
 
-            # Кнопка 1: Активація (у першій колонці)
             with col1:
                 if st.button(f"✅ Activate / Reload **{selected}**", type="primary"):
                     with st.spinner(f"Sending reload signal for {selected}..."):
-                        # Звертаємося до нашого API
                         result = sync_http_request(
                             method="PUT",
                             url=f"{API_URL}/models/{selected}/activate",
@@ -246,18 +230,17 @@ elif page == "🗂️ Model Registry":
             with col2:
                 if st.button(f"📊 Evaluate Performance", use_container_width=True):
                     with st.spinner(f"Calculating real MSE/MAE for {selected}..."):
-                        # Робимо POST запит на наш новий ендпоінт
                         eval_result = sync_http_request(
                             method="POST",
                             url=f"{API_URL}/models/{selected}/evaluate",
-                            response_model=ModelRead,  # Ендпоінт повертає оновлену модель
+                            response_model=ModelRead,
                         )
                     if eval_result:
                         st.success(
                             f"Metrics updated! "
                             f"MSE: {eval_result.mse:.4f} | MAE: {eval_result.mae:.4f}"
                         )
-                        time.sleep(2)  # Даємо 2 секунди почитати результати
+                        time.sleep(2)
                         st.rerun()
         else:
             st.info("ℹ️ No models registered yet.")
@@ -270,7 +253,7 @@ elif page == "🗂️ Model Registry":
         with col_ft1:
             tune_version = st.selectbox(
                 "Base Model Version",
-                all_versions,  # Тут можна вибирати будь-яку модель, навіть активну
+                all_versions,
                 help="Обери модель, ваги якої будуть використані як базові.",
             )
 
@@ -284,37 +267,60 @@ elif page == "🗂️ Model Registry":
 
         st.write("📅 **Select Data Range**")
 
-        # Дефолтні значення: від вчорашнього дня до зараз
-        now = datetime.datetime.now()
-        yesterday = now - datetime.timedelta(days=1)
+# 1. Фіксуємо дефолтні значення у session_state лише один раз!
+        if "ft_defaults_set" not in st.session_state:
+            now = datetime.datetime.now()
+            yesterday = now - datetime.timedelta(days=1)
+            
+            st.session_state.ft_start_date = yesterday.date()
+            st.session_state.ft_start_time = yesterday.time()
+            st.session_state.ft_end_date = now.date()
+            st.session_state.ft_end_time = now.time()
+            st.session_state.ft_defaults_set = True
 
         col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+        
+        # 2. Використовуємо key замість прямого value (Streamlit сам буде керувати станом)
         with col_d1:
-            start_date = st.date_input("Start Date", value=yesterday)
+            start_date = st.date_input(
+                "Start Date", 
+                value=st.session_state.ft_start_date, 
+                key="input_start_date"
+            )
         with col_d2:
-            start_time = st.time_input("Start Time", value=yesterday.time())
+            start_time = st.time_input(
+                "Start Time", 
+                value=st.session_state.ft_start_time, 
+                key="input_start_time"
+            )
         with col_d3:
-            end_date = st.date_input("End Date", value=now)
+            end_date = st.date_input(
+                "End Date", 
+                value=st.session_state.ft_end_date, 
+                key="input_end_date"
+            )
         with col_d4:
-            end_time = st.time_input("End Time", value=now.time())
+            end_time = st.time_input(
+                "End Time", 
+                value=st.session_state.ft_end_time, 
+                key="input_end_time"
+            )
 
         if st.button("🚀 Start Fine-Tuning", type="secondary"):
-            # Збираємо дату та час у ISO-формат (наприклад, 2026-03-01T10:00:00Z)
+            # Збираємо дату та час напряму з віджетів
             start_dt = datetime.datetime.combine(start_date, start_time)
             end_dt = datetime.datetime.combine(end_date, end_time)
 
             payload = {
                 "target_version": tune_version,
-                "start_time": start_dt,
-                "end_time": end_dt,
+                "start_time": start_dt.isoformat(), # Краще передавати як ISO рядок
+                "end_time": end_dt.isoformat(),
                 "epochs": epochs,
                 "batch_size": batch_size,
             }
 
             with st.spinner(f"Initiating fine-tuning for {tune_version}..."):
                 try:
-                    # УВАГА: Streamlit має стукати безпосередньо у контейнер Предиктора.
-                    # Перевір, чи правильний тут URL для твоєї Docker-мережі.
                     response = sync_http_request(
                         method="POST",
                         url=f"{PREDICTOR_URL}/retrain",
@@ -339,7 +345,7 @@ elif page == "🗂️ Model Registry":
 elif page == "📤 Upload Model":
     st.title("📤 Upload New Model")
     st.markdown(
-        "Upload a trained `.keras` Keras model and its `.pkl` scikit-learn scaler. "
+        "Upload a trained `.keras` GRU model and its **two** `.pkl` scikit-learn scalers. "
         "Leave *Version* empty to auto-generate one."
     )
 
@@ -354,30 +360,45 @@ elif page == "📤 Upload Model":
             type=["keras"],
             help="Keras model exported with model.save()",
         )
-        scaler_file = st.file_uploader(
-            "Scaler file (.pkl)",
-            type=["pkl"],
-            help="scikit-learn scaler exported with joblib.dump()",
-        )
+        
+        # 💡 Оновлено: Тепер два поля для завантаження скейлерів
+        col_s1, col_s2 = st.columns(2)
+        with col_s1:
+            scaler_X_file = st.file_uploader(
+                "Scaler X (Features) (.pkl)",
+                type=["joblib", "pkl"],
+                help="Scaler for input features",
+            )
+        with col_s2:
+            scaler_y_file = st.file_uploader(
+                "Scaler y (Target) (.pkl)",
+                type=["joblib", "pkl"],
+                help="Scaler for target output",
+            )
 
         submitted = st.form_submit_button(
             "📤 Upload", type="primary", use_container_width=True
         )
 
     if submitted:
-        if not model_file or not scaler_file:
-            st.error("Both model (.keras) and scaler (.pkl) files are required.")
+        if not model_file or not scaler_X_file or not scaler_y_file:
+            st.error("All three files (model, scaler_X, scaler_y) are required.")
         else:
-            with st.spinner("Uploading model..."):
+            with st.spinner("Uploading model and scalers..."):
                 files = {
                     "model_file": (
                         model_file.name,
                         model_file.getvalue(),
                         "application/octet-stream",
                     ),
-                    "scaler_file": (
-                        scaler_file.name,
-                        scaler_file.getvalue(),
+                    "scaler_x_file": (
+                        scaler_X_file.name,
+                        scaler_X_file.getvalue(),
+                        "application/octet-stream",
+                    ),
+                    "scaler_y_file": (
+                        scaler_y_file.name,
+                        scaler_y_file.getvalue(),
                         "application/octet-stream",
                     ),
                 }
@@ -461,6 +482,10 @@ elif page == "⚙️ Settings":
             if result:
                 st.success("✅ Settings saved successfully!")
                 st.rerun()
+                
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE: LOGS
+# ═════════════════════════════════════════════════════════════════════════════
 elif page == "📝 Logs":
     st.subheader("📋 System Logs & Events")
 
@@ -469,9 +494,6 @@ elif page == "📝 Logs":
     if "log_service" not in st.session_state:
         st.session_state.log_service = "All"
 
-    # ==========================================
-    # ПАНЕЛЬ КЕРУВАННЯ
-    # ==========================================
     col1, col2, col3, col4 = st.columns([1.5, 2, 1.5, 1.5])
 
     with col1:
@@ -495,10 +517,6 @@ elif page == "📝 Logs":
     if auto_refresh:
         st_autorefresh(interval=5000, limit=None, key="logs_autorefresh")
 
-    # ==========================================
-    # ОТРИМАННЯ СЕРВІСІВ ДЛЯ ФІЛЬТРУ
-    # ==========================================
-    # Робимо запит до нового ендпоінту
     db_services = sync_http_request(
         method="GET", url=f"{API_URL}/logs/services", response_model=list[str]
     )
@@ -518,11 +536,6 @@ elif page == "📝 Logs":
         )
         st.session_state.log_service = selected_service
 
-    # ==========================================
-    # ОТРИМАННЯ ТА ФІЛЬТРАЦІЯ ЛОГІВ
-    # ==========================================
-    # Тепер, якщо вибрано конкретний сервіс, ми можемо передати його прямо в API запит
-    # (Це ще більше оптимізує роботу, бо база не буде тягнути зайві логи)
     selected_service = selected_service if selected_service != "All" else None
     logs = sync_http_request(
         method="GET",
@@ -537,9 +550,6 @@ elif page == "📝 Logs":
 
         st.divider()
 
-        # ==========================================
-        # ВІЗУАЛІЗАЦІЯ В СТИЛІ GRAFANA
-        # ==========================================
         if not df_logs.empty:
             log_html = """
             <div style='

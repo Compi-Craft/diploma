@@ -37,7 +37,8 @@ class StatusResponse(BaseModel):
 class ReloadRequest(BaseModel):
     version: str
     model_path: str
-    scaler_path: str
+    scaler_x_path: str
+    scaler_y_path: str
 
 
 class RetrainCommand(BaseModel):
@@ -98,7 +99,8 @@ class ModelCreate(BaseModel):
     mse: Optional[float] = None
     mae: Optional[float] = None
     model_path: str
-    scaler_path: str
+    scaler_x_path: str
+    scaler_y_path: str
     is_active: bool = False
 
 
@@ -119,13 +121,15 @@ class ModelUploadRequest:
         mse: Optional[float] = Form(None),
         mae: Optional[float] = Form(None),
         model_file: UploadFile = File(...),
-        scaler_file: UploadFile = File(...),
+        scaler_x_file: UploadFile = File(...),
+        scaler_y_file: UploadFile = File(...),
     ):
         self.version = version
         self.mse = mse
         self.mae = mae
         self.model_file = model_file
-        self.scaler_file = scaler_file
+        self.scaler_x_file = scaler_x_file
+        self.scaler_y_file = scaler_y_file
 
 
 class SettingsUpdate(BaseModel):
