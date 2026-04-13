@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lpa-collector-scrape-config
+  namespace: monitoring
+stringData:
+  scrape.yaml: |
+    - job_name: 'lpa-collector'
+      scrape_interval: 5s
+      static_configs:
+        - targets: ['host.minikube.internal:8001']
+          labels:
+            service: 'lpa-collector'

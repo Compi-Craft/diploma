@@ -1,11 +1,10 @@
 import numpy as np
-from core.config import settings
+from config import MODEL_INPUT_STEPS
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from services.model_manager import model_manager
 from services.utils import run_finetune_pipeline
 from shared.schemas import (
     GenericResponse,
-    MetricPoint,
     PredictionRequest,
     PredictionResponse,
     ReloadRequest,
@@ -18,25 +17,20 @@ router = APIRouter()
 
 @router.post("/predict", response_model=PredictionResponse)
 async def predict(request: PredictionRequest) -> PredictionResponse:
-    if len(request.history) != settings.MODEL_INPUT_STEPS + 1:
+    if len(request.history) != MODEL_INPUT_STEPS + 1:
         raise HTTPException(
             status_code=400,
-            detail=f"Need exactly {settings.MODEL_INPUT_STEPS + 1} historical points",
+            detail=f"Need exactly {MODEL_INPUT_STEPS + 1} historical points",
         )
 
-    # Конвертуємо Pydantic об'єкти в NumPy масив: shape (1, 10, 3)
-    input_data = np.array([[[p.cpu, p.ram, p.rps] for p in request.history]])
+    # Конвертуємо Pydantic об'єкти в NumPy масив: shape (1, MODEL_INPUT_STEPS+1, 2)
+    input_data = np.array([[[p.cpu, p.rps] for p in request.history]])
 
-    # Викликаємо модель
-    prediction = model_manager.predict(input_data)
+    predicted_cpu = model_manager.predict(input_data)
 
     return PredictionResponse(
         version=model_manager.version,
-        predicted_values=MetricPoint(
-            cpu=float(prediction[0][0]),
-            ram=float(prediction[0][1]),
-            rps=float(prediction[0][2]),
-        ),
+        predicted_cpu=float(predicted_cpu),
     )
 
 

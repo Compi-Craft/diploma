@@ -1,4 +1,5 @@
 import datetime
+import html
 import time
 
 import pandas as pd
@@ -10,6 +11,7 @@ from shared.schemas import (
     GenericResponse,
     LogRead,
     LogServiceRead,
+    MetricHistoryRangeRead,
     MetricHistoryRead,
     MetricRead,
     ModelRead,
@@ -58,85 +60,121 @@ if page == "📈 Metrics":
     if auto_refresh_enabled:
         st_autorefresh(interval=refresh_interval * 1000, key="metrics_refresh")
 
-    RESOURCES: dict[str, tuple[str, str, str]] = {
-        "cpu": ("CPU Usage (cores)", "#2196F3", "#FF5722"),
-        "ram": ("RAM Usage (MB)", "#4CAF50", "#FF9800"),
-        "rps": ("Requests Per Second", "#9C27B0", "#F44336"),
-    }
+    # Один запит — всі метрики в одному рядку
+    data = sync_http_request(
+        "GET",
+        f"{API_URL}/metrics/history",
+        payload=MetricHistoryRead(limit=limit),
+        response_model=list[MetricRead],
+    )
 
-    for resource, (label, actual_color, pred_color) in RESOURCES.items():
-        data = sync_http_request(
-            "GET",
-            f"{API_URL}/metrics/history",
-            payload=MetricHistoryRead(resource=resource, limit=limit),
-            response_model=list[MetricRead],
+    if data:
+        raw_dicts = [item.model_dump() for item in data]
+        df = pd.DataFrame(raw_dicts)
+        df["ts"] = pd.to_datetime(df["ts"])
+        df = df.sort_values("ts")
+
+        # ── CPU Chart (з прогнозом та actual) ──
+        st.subheader("CPU Usage (cores)")
+        fig_cpu = go.Figure()
+        fig_cpu.add_trace(
+            go.Scatter(
+                x=df["ts"],
+                y=df["input_cpu"],
+                name="Input CPU (Current)",
+                line=dict(color="#2196F3", width=3),
+                mode="lines+markers",
+                marker=dict(size=4),
+            )
         )
-
-        st.subheader(label)
-        if data:
-            raw_dicts = [item.model_dump() for item in data]
-            df = pd.DataFrame(raw_dicts)
-            df["ts"] = pd.to_datetime(df["ts"])
-            df = df.sort_values("ts")
-
-            fig = go.Figure()
-
-            fig.add_trace(
-                go.Scatter(
-                    x=df["ts"],
-                    y=df["input_value"],
-                    name="Input (Current)",
-                    line=dict(color=actual_color, width=3),
-                    mode="lines+markers",
-                    marker=dict(size=4),
-                )
+        fig_cpu.add_trace(
+            go.Scatter(
+                x=df["ts"],
+                y=df["predicted_cpu"],
+                name="Predicted CPU (+60s)",
+                line=dict(color="#FF5722", width=2, dash="dot"),
+                mode="lines+markers",
+                marker=dict(size=5, symbol="diamond"),
             )
-
-            fig.add_trace(
-                go.Scatter(
-                    x=df["ts"],
-                    y=df["predicted_value"],
-                    name="Predicted (for +60s)",
-                    line=dict(color=pred_color, width=2, dash="dot"),
-                    mode="lines+markers",
-                    marker=dict(size=5, symbol="diamond"),
-                )
+        )
+        df_actual = df.dropna(subset=["actual_cpu"])
+        fig_cpu.add_trace(
+            go.Scatter(
+                x=df_actual["ts"],
+                y=df_actual["actual_cpu"],
+                name="Actual CPU (Outcome)",
+                line=dict(color="#FFD700", width=2, dash="dash"),
+                mode="lines+markers",
+                marker=dict(size=4, symbol="circle-open"),
             )
-
-            df_actual = df.dropna(subset=["actual_value"])
-            fig.add_trace(
-                go.Scatter(
-                    x=df_actual["ts"],
-                    y=df_actual["actual_value"],
-                    name="Actual Result (Outcome)",
-                    line=dict(color="#FFD700", width=2, dash="dash"),
-                    mode="lines+markers",
-                    marker=dict(size=4, symbol="circle-open"),
-                )
-            )
-
-            fig.update_layout(
-                height=350,
-                margin=dict(l=0, r=0, t=30, b=0),
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=1.02,
-                    xanchor="left",
-                    x=0,
-                ),
-                xaxis_title="Time (ts)",
-                yaxis_title=label,
-                hovermode="x unified",
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info(f"No data available for **{resource}** yet.")
-
+        )
+        fig_cpu.update_layout(
+            height=350,
+            margin=dict(l=0, r=0, t=30, b=0),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            xaxis_title="Time",
+            yaxis_title="CPU (cores)",
+            hovermode="x unified",
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(fig_cpu, use_container_width=True)
         st.divider()
+
+        # ── RAM Chart ──
+        st.subheader("RAM Usage (MB)")
+        fig_ram = go.Figure()
+        fig_ram.add_trace(
+            go.Scatter(
+                x=df["ts"],
+                y=df["input_ram"],
+                name="RAM (Current)",
+                line=dict(color="#4CAF50", width=3),
+                mode="lines+markers",
+                marker=dict(size=4),
+            )
+        )
+        fig_ram.update_layout(
+            height=300,
+            margin=dict(l=0, r=0, t=30, b=0),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            xaxis_title="Time",
+            yaxis_title="RAM (MB)",
+            hovermode="x unified",
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(fig_ram, use_container_width=True)
+        st.divider()
+
+        # ── RPS Chart ──
+        st.subheader("Requests Per Second")
+        fig_rps = go.Figure()
+        fig_rps.add_trace(
+            go.Scatter(
+                x=df["ts"],
+                y=df["input_rps"],
+                name="RPS (Current)",
+                line=dict(color="#9C27B0", width=3),
+                mode="lines+markers",
+                marker=dict(size=4),
+            )
+        )
+        fig_rps.update_layout(
+            height=300,
+            margin=dict(l=0, r=0, t=30, b=0),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            xaxis_title="Time",
+            yaxis_title="RPS",
+            hovermode="x unified",
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(fig_rps, use_container_width=True)
+    else:
+        st.info("No metric data available yet.")
+
+    st.divider()
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE: MODEL REGISTRY
@@ -191,8 +229,9 @@ elif page == "🗂️ Model Registry":
             col2.metric("MSE", f"{active.mse:.6f}" if active.mse is not None else "—")
             col3.metric("MAE", f"{active.mae:.6f}" if active.mae is not None else "—")
             with st.expander("File paths"):
-                # 💡 Оновлено: тепер показуємо обидва скейлери
-                st.code(f"Model:    {active.model_path}\nScaler X: {active.scaler_x_path}\nScaler y: {active.scaler_y_path}")
+                st.code(
+                    f"Model:    {active.model_path}\nScaler X: {active.scaler_x_path}\nScaler y: {active.scaler_y_path}"
+                )
 
         st.divider()
         st.subheader("🔄 Activate / Reload Model")
@@ -228,7 +267,7 @@ elif page == "🗂️ Model Registry":
                         time.sleep(1)
                         st.rerun()
             with col2:
-                if st.button(f"📊 Evaluate Performance", use_container_width=True):
+                if st.button("📊 Evaluate Performance", use_container_width=True):
                     with st.spinner(f"Calculating real MSE/MAE for {selected}..."):
                         eval_result = sync_http_request(
                             method="POST",
@@ -267,11 +306,10 @@ elif page == "🗂️ Model Registry":
 
         st.write("📅 **Select Data Range**")
 
-# 1. Фіксуємо дефолтні значення у session_state лише один раз!
         if "ft_defaults_set" not in st.session_state:
             now = datetime.datetime.now()
             yesterday = now - datetime.timedelta(days=1)
-            
+
             st.session_state.ft_start_date = yesterday.date()
             st.session_state.ft_start_time = yesterday.time()
             st.session_state.ft_end_date = now.date()
@@ -279,41 +317,102 @@ elif page == "🗂️ Model Registry":
             st.session_state.ft_defaults_set = True
 
         col_d1, col_d2, col_d3, col_d4 = st.columns(4)
-        
-        # 2. Використовуємо key замість прямого value (Streamlit сам буде керувати станом)
+
         with col_d1:
             start_date = st.date_input(
-                "Start Date", 
-                value=st.session_state.ft_start_date, 
-                key="input_start_date"
+                "Start Date",
+                value=st.session_state.ft_start_date,
+                key="input_start_date",
             )
         with col_d2:
             start_time = st.time_input(
-                "Start Time", 
-                value=st.session_state.ft_start_time, 
-                key="input_start_time"
+                "Start Time",
+                value=st.session_state.ft_start_time,
+                key="input_start_time",
             )
         with col_d3:
             end_date = st.date_input(
-                "End Date", 
-                value=st.session_state.ft_end_date, 
-                key="input_end_date"
+                "End Date", value=st.session_state.ft_end_date, key="input_end_date"
             )
         with col_d4:
             end_time = st.time_input(
-                "End Time", 
-                value=st.session_state.ft_end_time, 
-                key="input_end_time"
+                "End Time", value=st.session_state.ft_end_time, key="input_end_time"
             )
 
+        # ── Preview ──────────────────────────────────────────────────────────
+        start_dt_preview = datetime.datetime.combine(start_date, start_time)
+        end_dt_preview = datetime.datetime.combine(end_date, end_time)
+
+        preview_data = sync_http_request(
+            method="GET",
+            url=f"{API_URL}/metrics/history/range",
+            payload=MetricHistoryRangeRead(
+                start_time=start_dt_preview,
+                end_time=end_dt_preview,
+            ),
+            response_model=list[MetricRead],
+        )
+
+        if preview_data:
+            pv_df = pd.DataFrame([r.model_dump() for r in preview_data])
+            pv_df["ts"] = pd.to_datetime(pv_df["ts"])
+            pv_df = pv_df.sort_values("ts")
+
+            st.caption(f"📊 Preview: **{len(pv_df)}** points in selected range")
+
+            fig_cpu_ft = go.Figure()
+            fig_cpu_ft.add_trace(
+                go.Scatter(
+                    x=pv_df["ts"],
+                    y=pv_df["input_cpu"],
+                    name="CPU util [0–1]",
+                    line=dict(color="#2196F3", width=2),
+                    fill="tozeroy",
+                    fillcolor="rgba(33,150,243,0.1)",
+                )
+            )
+            fig_cpu_ft.update_layout(
+                height=200,
+                margin=dict(l=0, r=0, t=20, b=0),
+                yaxis=dict(title="CPU util", range=[0, 1]),
+                xaxis=dict(showticklabels=False),
+                hovermode="x unified",
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig_cpu_ft, use_container_width=True)
+
+            fig_rps_ft = go.Figure()
+            fig_rps_ft.add_trace(
+                go.Scatter(
+                    x=pv_df["ts"],
+                    y=pv_df["input_rps"],
+                    name="RPS",
+                    line=dict(color="#9C27B0", width=2),
+                    fill="tozeroy",
+                    fillcolor="rgba(156,39,176,0.1)",
+                )
+            )
+            fig_rps_ft.update_layout(
+                height=200,
+                margin=dict(l=0, r=0, t=5, b=0),
+                yaxis=dict(title="RPS"),
+                hovermode="x unified",
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig_rps_ft, use_container_width=True)
+        elif preview_data is not None:
+            st.info("ℹ️ Немає закритих прогнозів у вибраному діапазоні.")
+
+        # ─────────────────────────────────────────────────────────────────────
         if st.button("🚀 Start Fine-Tuning", type="secondary"):
-            # Збираємо дату та час напряму з віджетів
             start_dt = datetime.datetime.combine(start_date, start_time)
             end_dt = datetime.datetime.combine(end_date, end_time)
 
             payload = {
                 "target_version": tune_version,
-                "start_time": start_dt.isoformat(), # Краще передавати як ISO рядок
+                "start_time": start_dt.isoformat(),
                 "end_time": end_dt.isoformat(),
                 "epochs": epochs,
                 "batch_size": batch_size,
@@ -332,7 +431,7 @@ elif page == "🗂️ Model Registry":
                             "✅ Процес донавчання запущено у фоні! Нова модель з'явиться в таблиці після завершення (натисни Refresh за кілька хвилин)."
                         )
                     else:
-                        st.error(f"❌ Помилка: {response.message}")
+                        st.error("❌ Помилка запуску fine-tuning")
                 except requests.exceptions.RequestException as e:
                     st.error(f"❌ Не вдалося з'єднатися з сервісом Предиктора: {e}")
 
@@ -345,7 +444,7 @@ elif page == "🗂️ Model Registry":
 elif page == "📤 Upload Model":
     st.title("📤 Upload New Model")
     st.markdown(
-        "Upload a trained `.keras` GRU model and its **two** `.pkl` scikit-learn scalers. "
+        "Upload a trained `.keras` GRU model and its **two** `.joblib` scikit-learn scalers. "
         "Leave *Version* empty to auto-generate one."
     )
 
@@ -360,18 +459,17 @@ elif page == "📤 Upload Model":
             type=["keras"],
             help="Keras model exported with model.save()",
         )
-        
-        # 💡 Оновлено: Тепер два поля для завантаження скейлерів
+
         col_s1, col_s2 = st.columns(2)
         with col_s1:
             scaler_X_file = st.file_uploader(
-                "Scaler X (Features) (.pkl)",
+                "Scaler X (Features) (.joblib)",
                 type=["joblib", "pkl"],
                 help="Scaler for input features",
             )
         with col_s2:
             scaler_y_file = st.file_uploader(
-                "Scaler y (Target) (.pkl)",
+                "Scaler y (Target) (.joblib)",
                 type=["joblib", "pkl"],
                 help="Scaler for target output",
             )
@@ -416,7 +514,7 @@ elif page == "📤 Upload Model":
                 )
             if result:
                 st.success(f"✅ Model **{result.version}** uploaded successfully!")
-                st.json(result)
+                st.json(result.model_dump())
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE: SETTINGS
@@ -461,6 +559,16 @@ elif page == "⚙️ Settings":
                 height=90,
             )
 
+            st.subheader("Model Output")
+            prediction_cpu_limit = st.number_input(
+                "Prediction CPU Limit (cores)",
+                min_value=0.1,
+                max_value=64.0,
+                value=float(settings_data.prediction_cpu_limit),
+                step=0.1,
+                help="Hard cap on the exposed prediction value. Set to match limits.cpu × maxReplicas.",
+            )
+
             saved = st.form_submit_button(
                 "💾 Save Settings", type="primary", use_container_width=True
             )
@@ -472,6 +580,7 @@ elif page == "⚙️ Settings":
                 "cpu_query": cpu_query,
                 "ram_query": ram_query,
                 "rps_query": rps_query,
+                "prediction_cpu_limit": prediction_cpu_limit,
             }
             result = sync_http_request(
                 url=f"{API_URL}/settings",
@@ -482,7 +591,7 @@ elif page == "⚙️ Settings":
             if result:
                 st.success("✅ Settings saved successfully!")
                 st.rerun()
-                
+
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE: LOGS
 # ═════════════════════════════════════════════════════════════════════════════
@@ -553,13 +662,13 @@ elif page == "📝 Logs":
         if not df_logs.empty:
             log_html = """
             <div style='
-                background-color: #1e1e1e; 
-                padding: 15px; 
-                border-radius: 8px; 
-                font-family: "Courier New", Courier, monospace; 
+                background-color: #1e1e1e;
+                padding: 15px;
+                border-radius: 8px;
+                font-family: "Courier New", Courier, monospace;
                 font-size: 14px;
-                height: 600px; 
-                overflow-y: auto; 
+                height: 600px;
+                overflow-y: auto;
                 color: #cccccc;
                 line-height: 1.5;
                 box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
@@ -586,7 +695,7 @@ elif page == "📝 Logs":
                 log_html += f"<span style='color: #7f8c8d;'>[{ts}]</span> "
                 log_html += f"<span style='color: {color}; font-weight: bold;'>[{lvl_pad}]</span> "
                 log_html += f"<span style='color: #34ace0;'>[{svc}]</span> "
-                log_html += f"<span style='color: #f1f2f6;'>{msg}</span>"
+                log_html += f"<span style='color: #f1f2f6;'>{html.escape(msg)}</span>"
                 log_html += "</div>"
 
             log_html += "</div>"

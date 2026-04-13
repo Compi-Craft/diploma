@@ -92,13 +92,12 @@ services:
     container_name: collector
     networks:
       - internal-network
+      - minikube
     ports:
         - "8001:8001"
     command: ["python", "-u", "-m", "collector.worker"]
     volumes:
-      - ./app:/app 
-    extra_hosts:
-          - "host.docker.internal:host-gateway"
+      - ./app:/app
     depends_on:
       timescale_api:
         condition: service_healthy
@@ -193,6 +192,8 @@ services:
 
 networks:
   internal-network:
+  minikube:
+    external: true
 
 volumes:
   timescaledb_data:

@@ -4,6 +4,7 @@ import time
 
 from locust import HttpUser, LoadTestShape, between, task
 
+
 class ExtremeBotUser(HttpUser):
     # Прибираємо wait_time майже в нуль, щоб боти стріляли як кулемет
     wait_time = between(0.001, 0.05)
@@ -15,20 +16,22 @@ class ExtremeBotUser(HttpUser):
 
     @task(3)
     def heavy_garbage_collection(self) -> None:
-        # Відправляємо великі JSON. 
+        # Відправляємо великі JSON.
         # Десеріалізація 100КБ тексту у словник в пам'яті сервера — це чистий CPU.
         size = random.randint(50000, 150000)
         payload = {
             "session_id": f"bot_{random.randint(1, 999999)}",
-            "metadata": [random.random() for _ in range(100)], # Змушуємо парсити масив чисел
-            "junk_data": "X" * size
+            "metadata": [
+                random.random() for _ in range(100)
+            ],  # Змушуємо парсити масив чисел
+            "junk_data": "X" * size,
         }
         self.client.post("/echo", json=payload, name="/echo (Heavy JSON POST)")
 
 
 class ExtremeBlackFridayShape(LoadTestShape):
     """
-    УЛЬТРА-агресивний тест (2x масштаб). 
+    УЛЬТРА-агресивний тест (2x масштаб).
     Створений для жорсткого стрес-тестування предиктивного автоскейлера.
     """
 
@@ -40,14 +43,14 @@ class ExtremeBlackFridayShape(LoadTestShape):
         # Збираємо базові метрики (100 юзерів)
         # ----------------------------------------------------------------
         if run_time < 180:
-            return (100, 10) 
+            return (100, 10)
 
         # ----------------------------------------------------------------
         # ФАЗА 2: "Flash Sale / Жорсткий DDOS" (3 - 15 хвилин)
         # Стрибки до 2000 юзерів. Швидкість появи: 400 юзерів на секунду!
         # ----------------------------------------------------------------
         if run_time < 900:
-            cycle = run_time % 120  
+            cycle = run_time % 120
             if cycle < 20:
                 # Екстремальний спалах
                 return (2000, 400)
@@ -60,7 +63,7 @@ class ExtremeBlackFridayShape(LoadTestShape):
         # Повільний ріст до 1600 і миттєвий обвал.
         # ----------------------------------------------------------------
         if run_time < 1800:
-            cycle_time = (run_time - 900) % 300  
+            cycle_time = (run_time - 900) % 300
             if cycle_time < 270:
                 # Повільний, але агресивний ріст від 200 до 1600
                 users = 200 + int((cycle_time / 270) * 1400)
@@ -76,7 +79,7 @@ class ExtremeBlackFridayShape(LoadTestShape):
         # ----------------------------------------------------------------
         if run_time < 2400:
             base_users = 1000
-            noise = random.randint(-300, 500) 
+            noise = random.randint(-300, 500)
             return (base_users + noise, 100)
 
         # ----------------------------------------------------------------

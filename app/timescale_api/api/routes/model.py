@@ -1,8 +1,9 @@
+import json
 import os
 import shutil
-import json
-import numpy as np
 from collections import defaultdict
+
+import numpy as np
 from config import MODELS_DIR, SCALERS_DIR
 from fastapi import (
     APIRouter,
@@ -116,21 +117,35 @@ async def upload_custom_model(
     """Ендпоінт для завантаження власної моделі та обох скейлерів через Дашборд"""
 
     # 1. Перевіряємо формати
-    if not form_data.model_file.filename or not form_data.model_file.filename.endswith(".keras"):
+    if not form_data.model_file.filename or not form_data.model_file.filename.endswith(
+        ".keras"
+    ):
         raise HTTPException(status_code=400, detail="Модель має бути формату .keras")
-        
-    if not form_data.scaler_x_file.filename or not form_data.scaler_x_file.filename.endswith(".joblib"):
+
+    if (
+        not form_data.scaler_x_file.filename
+        or not form_data.scaler_x_file.filename.endswith(".joblib")
+    ):
         raise HTTPException(status_code=400, detail="Scaler X має бути формату .joblib")
-        
-    if not form_data.scaler_y_file.filename or not form_data.scaler_y_file.filename.endswith(".joblib"):
+
+    if (
+        not form_data.scaler_y_file.filename
+        or not form_data.scaler_y_file.filename.endswith(".joblib")
+    ):
         raise HTTPException(status_code=400, detail="Scaler y має бути формату .joblib")
 
-    version = form_data.version.strip() if form_data.version else generate_model_version()
+    version = (
+        form_data.version.strip() if form_data.version else generate_model_version()
+    )
 
     # 2. Формуємо унікальні шляхи для збереження (додаємо префікси _X_ та _y_, щоб не переплутати)
     model_path = os.path.join(MODELS_DIR, f"{version}_{form_data.model_file.filename}")
-    scaler_x_path = os.path.join(SCALERS_DIR, f"{version}_X_{form_data.scaler_x_file.filename}")
-    scaler_y_path = os.path.join(SCALERS_DIR, f"{version}_y_{form_data.scaler_y_file.filename}")
+    scaler_x_path = os.path.join(
+        SCALERS_DIR, f"{version}_X_{form_data.scaler_x_file.filename}"
+    )
+    scaler_y_path = os.path.join(
+        SCALERS_DIR, f"{version}_y_{form_data.scaler_y_file.filename}"
+    )
 
     # 3. Зберігаємо всі три файли на диск (Docker volume)
     with open(model_path, "wb") as buffer:
@@ -138,7 +153,7 @@ async def upload_custom_model(
 
     with open(scaler_x_path, "wb") as buffer:
         shutil.copyfileobj(form_data.scaler_x_file.file, buffer)
-        
+
     with open(scaler_y_path, "wb") as buffer:
         shutil.copyfileobj(form_data.scaler_y_file.file, buffer)
 
@@ -148,8 +163,8 @@ async def upload_custom_model(
         mse=form_data.mse,
         mae=form_data.mae,
         model_path=model_path,
-        scaler_x_path=scaler_x_path, # 💡 Оновлено
-        scaler_y_path=scaler_y_path, # 💡 Оновлено
+        scaler_x_path=scaler_x_path,  # 💡 Оновлено
+        scaler_y_path=scaler_y_path,  # 💡 Оновлено
         is_active=False,
     )
 
@@ -178,8 +193,8 @@ async def evaluate_real_performance(
     version: str, db: AsyncSession = Depends(get_db)
 ) -> ModelRead:
     """
-    Оцінює реальну точність проактивної Снайперської моделі (Фокус на CPU).
-    Використовує чисті абсолютні похибки (MSE, MAE) в ядрах процесора.
+    Оцінює реальну точність моделі на закритих прогнозах.
+    Використовує MSE та MAE по CPU utilization [0, 1].
     """
 
     # 1. Знаходимо модель
@@ -190,12 +205,11 @@ async def evaluate_real_performance(
     if not model_obj:
         raise HTTPException(status_code=404, detail=f"Модель {version} не знайдена")
 
-    # 2. Витягуємо всі "закриті" прогнози ВИКЛЮЧНО для CPU
+    # 2. Витягуємо всі "закриті" прогнози для CPU
     query_data = select(MetricEntry).where(
         MetricEntry.model_version == version,
-        MetricEntry.resource == "cpu",  # 🎯 Фільтруємо: нас цікавить тільки процесор!
-        MetricEntry.actual_value.is_not(None),
-        MetricEntry.predicted_value.is_not(None)
+        MetricEntry.actual_cpu.is_not(None),
+        MetricEntry.predicted_cpu.is_not(None),
     )
     result_data = await db.execute(query_data)
     entries = result_data.scalars().all()
@@ -206,28 +220,24 @@ async def evaluate_real_performance(
             detail="Немає достатньо реальних даних (CPU) для оцінки цієї моделі.",
         )
 
-    mse_list = []
-    mae_list = []
+    mse_list: list[float] = []
+    mae_list: list[float] = []
 
-    # 3. Рахуємо класичні метрики (значення вже є Float, ніякого парсингу!)
+    # 3. Рахуємо класичні метрики
     for e in entries:
-        act_val = e.actual_value
-        pred_val = e.predicted_value
-            
-        # Рахуємо: на скільки ЯДЕР ми помилилися
-        error = act_val - pred_val
-        mse_list.append(error ** 2)
+        error = float(e.actual_cpu) - float(e.predicted_cpu)
+        mse_list.append(error**2)
         mae_list.append(abs(error))
 
     # 4. Зберігаємо фінальні результати
-    model_obj.mse = float(np.mean(mse_list))
-    model_obj.mae = float(np.mean(mae_list))
+    model_obj.mse = float(np.mean(mse_list))  # type: ignore[assignment]
+    model_obj.mae = float(np.mean(mae_list))  # type: ignore[assignment]
 
     await db.commit()
     await db.refresh(model_obj)
 
     await send_system_log(
-        f"📊 Оновлено метрики {version}: MAE = {model_obj.mae:.4f} ядер CPU",
+        f"📊 Оновлено метрики {version}: MSE={model_obj.mse:.6f}, MAE={model_obj.mae:.6f} (utilization [0,1])",
         level="INFO",
         service="timescale_api",
     )

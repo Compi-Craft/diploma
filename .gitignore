@@ -49,7 +49,10 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
-
+thesis/
+*data*
+*.csv
+*.zip
 # Translations
 *.mo
 *.pot
@@ -76,7 +79,8 @@ target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
-
+.claude/
+CLAUDE.md
 # IPython
 profile_default/
 ipython_config.py

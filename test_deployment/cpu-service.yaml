@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cpu-service
+  labels:
+    app: cpu-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cpu-service
+  template:
+    metadata:
+      labels:
+        app: cpu-service
+    spec:
+      containers:
+      - name: cpu-service
+        image: cpu-service:latest
+        imagePullPolicy: Never  # Використовуємо локальний образ з minikube docker
+        ports:
+        - containerPort: 8080
+          name: http
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+          limits:
+            cpu: 1000m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          timeoutSeconds: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cpu-service
+  labels:
+    app: cpu-service
+spec:
+  ports:
+  - port: 8080
+    targetPort: http
+    name: http
+  selector:
+    app: cpu-service
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cpu-service-monitor
+  labels:
+    release: prometheus  # Без цього лейбла Prometheus ігноруватиме монітор
+spec:
+  selector:
+    matchLabels:
+      app: cpu-service
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 5s

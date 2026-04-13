@@ -1,42 +1,47 @@
 # LPA — Load Prediction Application
 
-A microservice system that collects infrastructure metrics (CPU, RAM, RPS) from Prometheus, feeds them into an LSTM neural network for short-term forecasting, and exposes everything through a real-time Streamlit dashboard.
+Predictive autoscaler for Kubernetes. A GRU neural network forecasts CPU utilization **60 seconds ahead**, exposes the prediction as a Prometheus metric, and KEDA uses it to scale pods *before* a traffic spike arrives — instead of reacting after CPU is already saturated.
 
 ---
 
-## Architecture
+## How It Works
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Docker Network                           │
-│                                                                 │
-│  Prometheus ──► Collector ──► LSTM Predictor ──► TimescaleDB   │
-│  (external)       :8001          :6000              :5432       │
-│                     │                │                │         │
-│                     └────────────────┴──► TimescaleAPI          │
-│                                              :5000              │
-│                                                │                │
-│                                           Dashboard             │
-│                                             :8501               │
-│                                                                 │
-│  Loki :3100 ◄─ Promtail ◄─ Docker logs                         │
-│  Grafana :3000 ──► Loki                                         │
-└─────────────────────────────────────────────────────────────────┘
+Prometheus (K8s)
+      │  every 5s: CPU utilization [0,1], RPS
+      ▼
+  Collector ──────────────────────────────────────────────────────────────────┐
+      │                                                                        │
+      │  buffer last 9 points → POST /predict                                 │
+      ▼                                                                        │
+  GRU Predictor                                                               │
+      │  4 features → GRU(64) → predicted_cpu_util (+60s)                     │
+      ▼                                                                        │
+  Prometheus Gauge                  TimescaleDB ◄──────────────────────────────┘
+  gru_predicted_cpu_util            (lpa_metrics)
+      │
+      ▼
+  KEDA ScaledObject  ──►  K8s HPA  ──►  scale cpu-service
+  (proactive trigger)     (reactive fallback)
 ```
+
+**Key idea:** With a 60s prediction horizon and a 15s pod startup time, the new pod is *ready* when the spike actually hits.
+
+---
 
 ## Services
 
-| Service | Image / Build | Port | Description |
-|---|---|---|---|
-| `timescale_api` | `./app` | **5000** | Central REST API; stores metrics & model registry in TimescaleDB |
-| `lstm-predictor` | `./app` | **6000** | FastAPI service that loads LSTM model and serves predictions |
-| `collector` | `./app` | **8001** | Async worker; polls Prometheus every 15 s, calls predictor, saves results |
-| `dashboard` | `./app` | **8501** | Streamlit UI — metrics charts, model registry, upload, settings |
-| `timescaledb` | `timescale/timescaledb:latest-pg14` | **5432** | PostgreSQL + TimescaleDB extension for time-series data |
-| `pgadmin` | `dpage/pgadmin4` | **5050** | Database administration UI |
-| `loki` | `grafana/loki:2.9.0` | **3100** | Log aggregation backend |
-| `promtail` | `grafana/promtail:2.9.0` | — | Log shipper; tails Docker container logs → Loki |
-| `grafana` | `grafana/grafana:10.2.0` | **3000** | Observability dashboard (logs from Loki) |
+| Service | Port | Description |
+|---------|------|-------------|
+| `timescale_api` | **5000** | Central REST API — metric storage, model registry, settings |
+| `lstm-predictor` | **6000** | GRU inference service with hot-swap model loading |
+| `collector` | **8001** | Async worker — polls Prometheus every 5s, fills prediction buffer, exposes Prometheus gauge |
+| `dashboard` | **8501** | Streamlit UI — metrics charts, model registry, upload, settings, logs |
+| `timescaledb` | **5432** | PostgreSQL + TimescaleDB |
+| `pgadmin` | **5050** | Database administration UI |
+| `loki` | **3100** | Log aggregation |
+| `promtail` | — | Log shipper (Docker logs → Loki) |
+| `grafana` | **3000** | Observability dashboard |
 
 ---
 
@@ -46,6 +51,7 @@ A microservice system that collects infrastructure metrics (CPU, RAM, RPS) from 
 
 - Docker ≥ 24 and Docker Compose v2
 - A running Prometheus instance accessible from the Docker host
+- Kubernetes cluster with KEDA installed (for autoscaling)
 
 ```bash
 git clone <repo-url>
@@ -53,41 +59,85 @@ cd diploma
 docker compose up -d --build
 ```
 
-Wait for health checks to pass (≈ 30 s), then open:
+Wait ~30s for health checks, then open:
 
 | URL | What |
-|---|---|
+|-----|------|
 | http://localhost:8501 | Streamlit Dashboard |
 | http://localhost:5000/docs | TimescaleAPI Swagger |
-| http://localhost:6000/docs | LSTM Predictor Swagger |
+| http://localhost:6000/docs | GRU Predictor Swagger |
 | http://localhost:3000 | Grafana (admin / admin) |
 | http://localhost:5050 | pgAdmin (admin@example.com / admin) |
 | http://localhost:8001/metrics | Collector Prometheus exporter |
 
 ### First-run configuration
 
-1. Open the Dashboard → **⚙️ Settings**.
-2. Set **Prometheus URL** (e.g. `http://host.docker.internal:9090/api/v1/query`).
-3. Set the three PromQL queries for CPU, RAM and RPS.
-4. Enable **Collector Active** and click **Save Settings**.
+1. Open Dashboard → **⚙️ Settings**
+2. Set **Prometheus URL** (e.g. `http://host.docker.internal:9090/api/v1/query`)
+3. Set PromQL queries for CPU, RAM and RPS
+4. Enable **Collector Active** → **Save**
 
-The collector will start gathering metrics within 15 seconds.
+The collector starts gathering metrics within 5 seconds. Predictions begin after 21 points accumulate (~105s).
 
 ---
 
-## Data Flow
+## Data Flow (5-second cycle)
 
 ```
-Every 15 s:
-  Collector
-    ├─ GET  /settings          → TimescaleAPI   (fetch Prometheus URL + PromQL)
-    ├─ POST Prometheus         → query CPU / RAM / RPS instant values
-    ├─ PUT  /metrics/sync      → TimescaleAPI   (back-fill actual_value for past forecasts)
-    ├─ (buffer ≥ 10 points)
-    │   ├─ POST /predict       → LSTM Predictor (10-step window → next-interval forecast)
-    │   └─ POST /metrics/predict → TimescaleAPI (persist forecast record)
-    └─ Prometheus Gauges       → lstm_predicted_cpu_cores / ram / rps
+1. Fetch CPU utilization [0,1] and RPS from Prometheus
+2. Save raw CPU reading (for later actual_cpu sync)
+3. Sync actual_cpu for past predictions where target_ts ≈ now
+4. Append {cpu_util, rps} to circular buffer (maxlen = MODEL_INPUT_STEPS + 1 = 9)
+5. When buffer is full (9 points):
+     a. Build 4 features: pct_change(cpu), pct_change(rps), cpu_level, log1p(rps)
+     b. POST /predict → GRU → predicted_cpu_util ∈ [0, 1]
+     c. Set Prometheus gauge: gru_predicted_cpu_util
+     d. POST /metrics/predict → save row to DB
+6. KEDA polls: max(gru_predicted_cpu_util) * 100 * replicas_ready → threshold 50
 ```
+
+---
+
+## GRU Model
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Architecture | GRU(64) + Dropout(0.35) + Dense(1, sigmoid) | ~13K parameters |
+| Features | pct_change(cpu), pct_change(rps), cpu_level, log1p(rps) | 4 features, hardware-agnostic |
+| Input | 8 steps × 4 features (40s window) | scale-invariant velocity + level |
+| Output | cpu_util[t+12] point prediction ∈ [0, 1] | 60s ahead (sigmoid, no scaler_y) |
+| Loss | Quantile loss (q=0.75) | bias toward over-provisioning |
+
+### Training workflow
+
+```
+1. Run Locust scenarios against cpu-service with 1 fixed replica, NO HPA
+   → collect clean RPS→CPU data via Collector → export from DB
+2. Train in notebooks/deep_learning_percentage_absolute_out.ipynb
+   → produces: model.keras + scaler_X.joblib (no scaler_y needed)
+3. Upload via Dashboard → Upload Model (multipart: .keras + .joblib)
+4. Activate via Dashboard → Model Registry → Activate
+   → triggers hot-swap in GRU Predictor (zero downtime)
+```
+
+---
+
+## KEDA Integration
+
+```yaml
+# test_deployment/predictive_hpa.yaml
+triggers:
+  - type: prometheus          # PROACTIVE — ML prediction
+    metricType: AverageValue
+    query: max(gru_predicted_cpu_util) * 100 * scalar(kube_deployment_status_replicas_ready{...})
+    threshold: '50'           # stable when prediction < 50%
+
+  - type: cpu                 # REACTIVE — fallback (vanilla HPA behaviour)
+    metricType: AverageValue
+    value: "500"              # 500m per pod (50% of 1000m limit)
+```
+
+The dual-trigger design ensures the system **cannot perform worse than vanilla HPA**.
 
 ---
 
@@ -95,94 +145,29 @@ Every 15 s:
 
 ### TimescaleAPI (`localhost:5000`)
 
-#### Metrics
-
 | Method | Path | Description |
-|---|---|---|
-| `PUT` | `/metrics/sync` | Back-fill `actual_value` for predictions whose `target_ts` has passed |
+|--------|------|-------------|
+| `GET` | `/metrics/history` | Fetch recent prediction records |
+| `GET` | `/metrics/history/range` | Fetch records in time range (for fine-tuning) |
 | `POST` | `/metrics/predict` | Save a new prediction record |
-| `GET` | `/metrics/history?resource=cpu&limit=100` | Fetch history for dashboard charts |
-
-#### Model Registry
-
-| Method | Path | Description |
-|---|---|---|
+| `PUT` | `/metrics/{id}/actual` | Sync actual_cpu for a past prediction |
 | `GET` | `/models` | List all registered models |
-| `POST` | `/models` | Register a new model (JSON body) |
-| `GET` | `/models/active` | Get the currently active model (used by predictor on cold start) |
-| `PUT` | `/models/{version}/activate` | Activate a model and trigger hot-swap in the predictor |
-| `POST` | `/models/upload` | Upload `.keras` model + `.pkl` scaler via multipart form |
+| `POST` | `/models` | Register a new model |
+| `GET` | `/models/active` | Get currently active model (used by predictor on cold start) |
+| `PUT` | `/models/{version}/activate` | Activate + trigger hot-swap |
+| `POST` | `/models/upload` | Upload `.keras` + 2 × `.joblib` scalers (multipart) |
+| `POST` | `/models/{version}/evaluate` | Calculate real MSE/MAE from DB |
+| `GET` | `/settings` | Fetch system settings |
+| `PUT` | `/settings` | Update Prometheus URL, PromQL queries, collector toggle |
 
-#### Settings
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/settings` | Fetch current system settings |
-| `PUT` | `/settings` | Update Prometheus URL, PromQL queries, collector on/off flag |
-
-#### Health
+### GRU Predictor (`localhost:6000`)
 
 | Method | Path | Description |
-|---|---|---|
-| `GET` | `/health` | Liveness probe |
-
----
-
-### LSTM Predictor (`localhost:6000`)
-
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/predict` | Run inference; body: `{ "history": [ {cpu, ram, rps} × 10 ] }` |
-| `POST` | `/reload` | Hot-swap model; body: `{ "version", "model_path", "scaler_path" }` |
-| `GET` | `/status` | Returns current model version and status |
-
----
-
-## Model Management
-
-### Cold Start
-
-On startup the LSTM Predictor calls `GET /models/active` on the TimescaleAPI. If a model is found it loads the `.keras` + `.pkl` files from the shared volume. If no model is registered it falls back to a dummy (zeros) model until a real one is activated.
-
-### Hot Swap
-
-Activating a model via the Dashboard or `PUT /models/{version}/activate`:
-
-1. TimescaleAPI flips `is_active` in the database.
-2. A background task calls `POST /reload` on the LSTM Predictor with the new file paths.
-3. The predictor loads the new model under a `threading.Lock` — zero downtime, no restart.
-
-### Uploading a Custom Model
-
-Via the Dashboard → **📤 Upload Model**:
-- Upload a Keras `.keras` model and a scikit-learn `.pkl` scaler.
-- Optionally supply a version string, MSE and MAE metrics.
-- Files are saved to the shared volume; a registry record is created.
-- Activate the uploaded model from the **🗂️ Model Registry** page.
-
-### Training Workflow
-
-```
-1. Collect data from /metrics/history (or use your own dataset)
-2. Train an LSTM: input shape (batch, 10, 3), output shape (batch, 3)
-3. Fit a StandardScaler on the training data, save with joblib.dump()
-4. Save the Keras model with model.save("model.keras")
-5. Upload via Dashboard → Upload Model
-6. Activate via Dashboard → Model Registry → Activate
-```
-
----
-
-## LSTM Model Configuration
-
-Configured in [app/lstm_module/core/config.py](app/lstm_module/core/config.py):
-
-| Parameter | Default | Description |
-|---|---|---|
-| `MODEL_INPUT_STEPS` | `10` | Number of historical points fed to the model |
-| `MODEL_FEATURES` | `3` | Number of features: cpu, ram, rps |
-
-Default prediction horizon: **60 seconds** (configurable per request via `horizon_seconds`).
+|--------|------|-------------|
+| `POST` | `/predict` | Run inference; body: `{"history": [{cpu, rps} × 9]}` |
+| `POST` | `/reload` | Hot-swap model (no restart); body: `{version, model_path, scaler_x_path, scaler_y_path}` |
+| `POST` | `/retrain` | Start background fine-tuning |
+| `GET` | `/status` | Current model version and status |
 
 ---
 
@@ -190,88 +175,51 @@ Default prediction horizon: **60 seconds** (configurable per request via `horizo
 
 ### Environment Variables
 
-| Variable | Service | Default | Description |
-|---|---|---|---|
-| `PORT` | timescale_api | `5000` | HTTP listen port |
-| `PORT` | lstm-predictor | `6000` | HTTP listen port |
-| `API_URL` | dashboard | `http://timescale_api:5000` | TimescaleAPI base URL |
-| `POSTGRES_PASSWORD` | timescaledb | `lpa_password` | DB password |
-| `POSTGRES_DB` | timescaledb | `lpa_database` | DB name |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `API_URL` | `http://timescale_api:5000` | TimescaleAPI base URL |
+| `PREDICTOR_URL` | `http://lstm-predictor:6000` | GRU Predictor base URL |
+| `MODELS_DIR` | `/app/lstm_module/ml_models` | Model files directory |
+| `SCALERS_DIR` | `/app/lstm_module/scalers` | Scaler files directory |
+| `MODEL_INPUT_STEPS` | `8` | History window size (steps × 5s = 40s context) |
+| `MODEL_FEATURES` | `4` | Number of input features (pct_cpu, pct_rps, cpu_level, rps_level) |
 
-TimescaleAPI connects to `postgresql+asyncpg://postgres:lpa_password@timescaledb/lpa_database` by default (hardcoded in [app/timescale_api/api/database.py](app/timescale_api/api/database.py)).
-
-### Monitoring Stack Config Files
-
-| File | Purpose |
-|---|---|
-| `configs/loki-config.yml` | Loki storage and ingestion config |
-| `configs/promtail-config.yml` | Promtail Docker log scraping targets |
-| `configs/grafana-datasources.yml` | Auto-provision Loki as Grafana datasource |
+All variables are defined in [app/config.py](app/config.py) and can be overridden via Docker environment.
 
 ---
 
-## Dashboard
+## Load Testing & A/B Experiment
 
-The Streamlit dashboard ([app/dashboard/app.py](app/dashboard/app.py)) has four pages:
+Located in [test_deployment/locusts/](test_deployment/locusts/):
 
-**📈 Metrics** — Auto-refreshing Plotly charts (one per resource: CPU / RAM / RPS) showing:
-- Actual measured values
-- LSTM predicted values (dashed, for the next interval)
-- Retrospective actuals plotted at the predicted target time
+| File | Description |
+|------|-------------|
+| `locustfile_scenarios.py` | All 6 scenarios in sequence (~72 min total) |
+| `scenario_1_linear_ramp.py` | Gradual 1→30 users over 10 min |
+| `scenario_2_step_function.py` | Sudden jumps between load levels |
+| `scenario_3_sine_wave.py` | Periodic sin² wave |
+| `scenario_4_multi_spike.py` | Short bursts with quiet pauses — best for showing predictive advantage |
+| `scenario_5_random_walk.py` | Unpredictable (seeded RNG) |
+| `scenario_6_quiet_burst.py` | Quiet baseline + rare large bursts — best for showing predictive advantage |
+| `run_all_scenarios.sh` | Runs all 6 with 2-min cooldown between |
 
-Configurable refresh interval (5–60 s) and history window (20–300 points) from the sidebar.
-
-**🗂️ Model Registry** — Table of all registered models with version, status, MSE, MAE, created date. Supports one-click model activation.
-
-**📤 Upload Model** — Form to upload a `.keras` Keras model and `.pkl` scaler with optional version string and metrics.
-
-**⚙️ Settings** — Edit Prometheus URL, PromQL queries for each resource, and toggle the collector on/off.
-
----
-
-## Load Testing
-
-Located in [test_deployment/](test_deployment/):
+### A/B comparison (Vanilla HPA vs Predictive KEDA)
 
 ```bash
-# Basic load test
-locust -f test_deployment/locustfile.py --host http://localhost:5000
+# Round A — Vanilla HPA (reactive baseline)
+kubectl delete scaledobject --all
+kubectl apply -f test_deployment/vanilla_hpa.yaml
+locust -f locusts/locustfile_scenarios.py --headless -u 30 -r 5 --run-time 40m
 
-# Extended test (all endpoints)
-locust -f test_deployment/locustfile_extended.py --host http://localhost:5000
+# Round B — Predictive KEDA
+kubectl delete hpa --all
+kubectl apply -f test_deployment/predictive_hpa.yaml
+locust -f locusts/locustfile_scenarios.py --headless -u 30 -r 5 --run-time 40m
 ```
 
----
+Key metrics to compare: P99 latency during spike onset, scale-up lag, CPU throttling duration, wasted pod-seconds.
 
-## Development
-
-### Running Services Locally
-
-Each service sets its own module path. From `app/`:
-
-```bash
-# TimescaleAPI
-python timescale_api/run.py
-
-# LSTM Predictor
-python lstm_module/main.py
-
-# Collector
-python -m collector.worker
-```
-
-### Code Quality
-
-```bash
-# Formatting
-black app/
-isort app/
-
-# Type checking
-mypy .
-```
-
-Configuration in [pyproject.toml](pyproject.toml): Black line length 88, mypy strict mode (`disallow_untyped_defs = true`).
+**Note:** `cpu-service.yaml` uses `initialDelaySeconds: 15` to simulate a slow-starting application (e.g. Spring Boot). This makes the 30s prediction horizon meaningful — the pod is ready exactly when the spike arrives.
 
 ---
 
@@ -280,43 +228,55 @@ Configuration in [pyproject.toml](pyproject.toml): Black line length 88, mypy st
 ```
 diploma/
 ├── app/
-│   ├── timescale_api/          # Central REST API (FastAPI + SQLAlchemy + TimescaleDB)
+│   ├── config.py                   # Global config: URLs, dirs, MODEL_INPUT_STEPS, MODEL_FEATURES
+│   ├── timescale_api/              # Central REST API (FastAPI + SQLAlchemy + TimescaleDB)
 │   │   └── api/
-│   │       ├── routes/
-│   │       │   ├── metrics.py  # /metrics endpoints
-│   │       │   ├── model.py    # /models endpoints
-│   │       │   └── settings.py # /settings endpoints
-│   │       ├── models.py       # SQLAlchemy ORM models
-│   │       ├── schemas.py      # Pydantic schemas
-│   │       ├── database.py     # Async DB session
-│   │       └── utils.py        # Version generator, predictor notifier
-│   ├── lstm_module/            # LSTM Predictor microservice (FastAPI)
-│   │   ├── api/routes.py       # /predict, /reload, /status
-│   │   ├── services/
-│   │   │   └── model_manager.py # Thread-safe model hot-swap
-│   │   ├── models/schemas.py   # Pydantic schemas
-│   │   └── core/config.py      # MODEL_INPUT_STEPS, MODEL_FEATURES
-│   ├── collector/              # Metric collection worker
-│   │   ├── worker.py           # Main async loop (15 s interval)
+│   │       ├── routes/             # metrics.py, model.py, settings.py, logs.py
+│   │       ├── models.py           # ORM: MetricEntry, ModelRegistry, SystemSettings, SystemLog
+│   │       └── database.py
+│   ├── lstm_module/                # GRU Predictor microservice (FastAPI, port 6000)
+│   │   ├── api/routes.py           # /predict, /reload, /retrain, /status
+│   │   ├── core/config.py          # PROJECT_NAME only
 │   │   └── services/
-│   │       ├── prometheus.py   # PromQL fetch
-│   │       ├── predictor.py    # LSTM Predictor client
-│   │       └── api_client.py   # TimescaleAPI client
+│   │       ├── model_manager.py    # Thread-safe predict + hot-swap + fine-tune
+│   │       └── utils.py            # Fine-tune pipeline, data preparation
+│   ├── collector/                  # Metric collection worker (port 8001)
+│   │   ├── worker.py               # Main async loop (5s interval)
+│   │   └── services/
+│   │       ├── prometheus.py       # PromQL fetch
+│   │       └── api_client.py       # TimescaleAPI + Predictor client
 │   ├── dashboard/
-│   │   └── app.py              # Streamlit dashboard (4 pages)
-│   ├── ml_models/              # Default LSTM model (.keras)
-│   ├── scalers/                # Default scaler (.pkl)
-│   ├── requirements.txt
+│   │   └── app.py                  # Streamlit (5 pages: Metrics, Registry, Upload, Settings, Logs)
+│   ├── shared/
+│   │   ├── schemas.py              # All Pydantic models
+│   │   ├── utils.py
+│   │   └── logger.py
+│   ├── ml_models/                  # .keras model files
+│   ├── scalers/                    # .joblib scaler files
 │   └── Dockerfile
+├── notebooks/
+│   ├── deep_learning_percentage_absolute_out.ipynb  # Main training notebook (current production model)
+│   ├── hyperparam_search.ipynb                      # Walk-forward CV: window/horizon/feature search
+│   └── cpu_load_deployment.ipynb                    # EDA of collected dataset
 ├── test_deployment/
-│   ├── locustfile.py           # Basic load test
-│   └── locustfile_extended.py  # Extended load test
-├── configs/
-│   ├── loki-config.yml
-│   ├── promtail-config.yml
-│   └── grafana-datasources.yml
-├── tools/
-│   └── format_data.py          # Data preparation utility
+│   ├── cpu-service.yaml            # Target deployment (bcrypt CPU load, startup 15s)
+│   ├── predictive_hpa.yaml         # KEDA ScaledObject (ML + CPU dual trigger)
+│   ├── vanilla_hpa.yaml            # Standard HPA for A/B baseline
+│   ├── podinfo.yaml                # Alternative target deployment
+│   └── locusts/                    # 6 Locust scenarios + runner
+├── configs/                        # Loki, Promtail, Grafana provisioning
 ├── docker-compose.yaml
-└── pyproject.toml              # Black, isort, mypy config
+└── pyproject.toml                  # Black, isort, mypy config
 ```
+
+---
+
+## Code Quality
+
+```bash
+black app/
+isort app/
+mypy
+```
+
+Configuration in [pyproject.toml](pyproject.toml): Black line length 88, mypy checks `app/` only.

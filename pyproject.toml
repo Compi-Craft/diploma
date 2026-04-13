@@ -18,6 +18,7 @@ line_length = 88
 [tool.mypy]
 python_version = "3.10"
 mypy_path = "app"
+files = ["app"]
 explicit_package_bases = true
 disallow_untyped_defs = true
 disallow_incomplete_defs = true

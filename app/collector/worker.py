@@ -1,83 +1,89 @@
 import asyncio
+import datetime
 from collections import deque
-from typing import Deque, Dict
+from typing import Deque, Dict, Tuple
 
+from config import MODEL_INPUT_STEPS
 from prometheus_client import Gauge, start_http_server
 from shared.logger import send_system_log
 from shared.schemas import SettingsRead
 
 from .services import api_client, prometheus
 
-# --- Оголошуємо наші метрики ---
-# УВАГА: Якщо у тебе в Grafana графіки шукають "lstm_predicted...", 
-# тобі треба буде оновити PromQL запити на "gru_predicted..."
 PREDICTED_CPU = Gauge(
-    "gru_predicted_cpu_cores", "Predicted CPU usage in cores for the next window (GRU)"
+    "gru_predicted_cpu_util",
+    "Predicted CPU utilization [0,1] for the next window (GRU)",
 )
-PREDICTED_RAM = Gauge("gru_predicted_ram_mb", "Predicted RAM usage in MB (GRU)")
-PREDICTED_RPS = Gauge("gru_predicted_rps", "Predicted Requests Per Second (GRU)")
-# -------------------------------------
+
+# Below this actual CPU utilization, the input is outside the training distribution
+# (training data min was ~0.028 under Locust load). A linear blend smoothly shifts
+# the exposed prediction toward actual_cpu, preventing idle over-provisioning.
+OOD_BLEND_THRESHOLD = 0.10
 
 is_busy = False
-# 💡 ЗМІНА 1: Тепер буфер зберігає 11 точок (1 поточна + 10 для розрахунку прискорення)
-history_buffer: Deque[Dict[str, float]] = deque(maxlen=11)
+history_buffer: Deque[Dict[str, float]] = deque(maxlen=MODEL_INPUT_STEPS + 1)
+# Черга: (row_id, target_ts) — для точного sync actual_cpu по id
+pending_sync: Deque[Tuple[int, datetime.datetime]] = deque()
+
+
+async def restore_pending_sync() -> None:
+    """При рестарті відновлює чергу sync для рядків, які ще не отримали actual_cpu.
+    Оскільки sync використовує raw_cpu_readings, значення будуть точними навіть
+    для рядків де target_ts вже давно минув."""
+    try:
+        orphans = await api_client.get_unsynced_rows()
+        for row in orphans:
+            pending_sync.append((row.id, row.target_ts))
+        if orphans:
+            await send_system_log(
+                f"🔄 Відновлено {len(orphans)} рядків у pending_sync після рестарту.",
+                level="INFO",
+                service="collector",
+            )
+    except Exception as e:
+        await send_system_log(
+            f"⚠️ Помилка відновлення pending_sync: {e}",
+            level="ERROR",
+            service="collector",
+        )
 
 
 async def restore_history_buffer() -> None:
-    """Відновлює останні 11 точок з бази даних для швидкого старту GRU."""
+    """Відновлює останні MODEL_INPUT_STEPS + 1 точок з бази даних для швидкого старту GRU."""
     await send_system_log(
         "🔄 Спроба відновити історію з БД для швидкого старту...",
         level="INFO",
         service="collector",
     )
     try:
-        # 💡 ЗМІНА 2: Запитуємо 11 точок з БД
-        cpu_data = await api_client.get_recent_history("cpu", limit=11)
-        ram_data = await api_client.get_recent_history("ram", limit=11)
-        rps_data = await api_client.get_recent_history("rps", limit=11)
+        recent_data = await api_client.get_recent_history(limit=MODEL_INPUT_STEPS + 1)
 
-        # 2. API зазвичай повертає найновіші першими (DESC сортування).
-        # Але для GRU критично важливий хронологічний порядок (від старого до нового).
-        cpu_data.reverse()
-        ram_data.reverse()
-        rps_data.reverse()
+        if not recent_data:
+            await send_system_log(
+                "ℹ️ База порожня. Буфер почне заповнюватися з нуля.",
+                level="INFO",
+                service="collector",
+            )
+            return
 
-        # 3. Беремо мінімальну довжину (на випадок, якщо даних у базі ще мало)
-        min_len = min(len(cpu_data), len(ram_data), len(rps_data))
+        # API повертає DESC, нам потрібен хронологічний порядок
+        recent_data.reverse()
 
-        for i in range(min_len):
+        for entry in recent_data:
             point = {
-                "cpu": (
-                    cpu_data[i].input_value
-                    if cpu_data[i].input_value is not None
-                    else 0.0
-                ),
-                "ram": (
-                    ram_data[i].input_value
-                    if ram_data[i].input_value is not None
-                    else 0.0
-                ),
-                "rps": (
-                    rps_data[i].input_value
-                    if rps_data[i].input_value is not None
-                    else 0.0
-                ),
+                "cpu": entry.input_cpu if entry.input_cpu is not None else 0.0,
+                "rps": entry.input_rps if entry.input_rps is not None else 0.0,
             }
             history_buffer.append(point)
 
-        if min_len > 0:
-            # 💡 ЗМІНА 3: Логуємо 11 точок
-            msg = f"✅ Буфер відновлено! Завантажено {min_len}/11 точок з БД."
-            await api_client.send_system_log(msg, "INFO", "collector")
-        else:
-            await api_client.send_system_log(
-                "ℹ️ База порожня. Буфер почне заповнюватися з нуля.",
-                "INFO",
-                "collector",
-            )
+        await send_system_log(
+            f"✅ Буфер відновлено! Завантажено {len(recent_data)}/{MODEL_INPUT_STEPS + 1} точок з БД.",
+            level="INFO",
+            service="collector",
+        )
 
     except Exception as e:
-        await api_client.send_system_log(
+        await send_system_log(
             f"⚠️ Помилка відновлення буфера: {e}", "ERROR", "collector"
         )
 
@@ -100,10 +106,9 @@ async def process_metrics_task(sys_settings: SettingsRead) -> None:
 
         current_metrics = {}
         max_retries = 3
-        retry_delay = 5
+        retry_delay = 0.5
         fetch_success = False
 
-        # 1. Захищений збір реальних даних (з ретраями)
         for attempt in range(max_retries):
             all_metrics_ok = True
 
@@ -115,86 +120,94 @@ async def process_metrics_task(sys_settings: SettingsRead) -> None:
                     val = await prometheus.fetch_metric(query, prom_url=prom_url)
                 except Exception as e:
                     val = None
-                    await send_system_log(
-                        f"⚠️ Помилка з'єднання з Prometheus: {e}",
-                        level="ERROR",
-                        service="collector",
-                    )
 
                 if val is None:
-                    await send_system_log(
-                        f"   ⏳ Не вдалося отримати '{resource}'. Спроба {attempt + 1} з {max_retries}. Чекаємо {retry_delay} сек...",
-                        level="WARNING",
-                        service="collector",
-                    )
                     all_metrics_ok = False
-                    break  # Перериваємо внутрішній цикл, щоб почекати і спробувати всі квері наново
+                    break
 
                 current_metrics[resource] = val
+                await asyncio.sleep(0.1)
 
             if all_metrics_ok:
                 fetch_success = True
-                break  # Всі метрики зібрано успішно, виходимо з циклу ретраїв
+                break
 
             if attempt < max_retries - 1:
                 await asyncio.sleep(retry_delay)
 
-        # Якщо після всіх спроб дані не зібрано - скасовуємо цикл
         if not fetch_success:
-            await send_system_log(
-                "❌ Prometheus недоступний. Пропускаємо цей цикл, щоб не псувати історію нулями.",
-                level="ERROR",
-                service="collector",
-            )
+            if history_buffer:
+                history_buffer.append(history_buffer[-1])
+                await send_system_log(
+                    "⚠️ Prometheus недоступний. Forward-fill: використано попередню точку для збереження 5s інтервалу.",
+                    level="WARNING",
+                    service="collector",
+                )
+            else:
+                await send_system_log(
+                    "❌ Prometheus недоступний і буфер порожній. Пропускаємо цей цикл.",
+                    level="ERROR",
+                    service="collector",
+                )
             return
 
-        # 2. Якщо все успішно, синхронізуємо actual_value для минулих прогнозів
-        for resource, val in current_metrics.items():
-            await api_client.sync_actual_values(resource, val)
+        # Зберігаємо сире вимірювання CPU з точною міткою часу
+        now = datetime.datetime.now(datetime.timezone.utc)
+        await api_client.save_raw_reading(ts=now, cpu_value=current_metrics["cpu"])
 
-        # 3. Додаємо точку в історію
+        # Синхронізуємо actual_cpu для рядків з черги, час яких настав
+        while pending_sync and pending_sync[0][1] <= now:
+            row_id, _ = pending_sync.popleft()
+            await api_client.sync_by_id(row_id)
+
+        # Додаємо точку в історію
         point = {
             "cpu": current_metrics.get("cpu", 0.0),
-            "ram": current_metrics.get("ram", 0.0),
             "rps": current_metrics.get("rps", 0.0),
         }
         history_buffer.append(point)
         await send_system_log(
-            f"   📥 Зібрано: CPU={point['cpu']:.2f}, RAM={point['ram']:.2f}, RPS={point['rps']:.2f}",
+            f"   📥 Зібрано: CPU_util={point['cpu']:.4f} ({point['cpu']*100:.1f}%), RPS={point['rps']:.2f}",
             level="INFO",
             service="collector",
         )
 
-        # 💡 ЗМІНА 4: Робимо прогноз ТІЛЬКИ коли зібрано 11 точок
-        if len(history_buffer) == 11:
+        # Прогноз ТІЛЬКИ коли зібрано MODEL_INPUT_STEPS + 1 точок
+        if len(history_buffer) == MODEL_INPUT_STEPS + 1:
             payload = list(history_buffer)
-            predictions = await api_client.get_prediction(payload)
+            predicted_cpu = await api_client.get_prediction(payload)
 
-            if predictions:
+            if predicted_cpu is not None:
+                cpu_limit = sys_settings.prediction_cpu_limit
+                capped = min(predicted_cpu, cpu_limit)
+
+                # OOD guard: blend toward actual when CPU is below training distribution.
+                # Training data never contained cpu_util < 0.028; below OOD_BLEND_THRESHOLD
+                # the model is unreliable and saturates artificially high.
+                actual_cpu = current_metrics["cpu"]
+                alpha = min(1.0, actual_cpu / OOD_BLEND_THRESHOLD)
+                exposed = alpha * capped + (1.0 - alpha) * actual_cpu
+
                 await send_system_log(
-                    f"   🔮 Прогноз: CPU={predictions.cpu:.2f}, RAM={predictions.ram:.2f}, RPS={predictions.rps:.2f}",
+                    f"   🔮 Прогноз CPU util: raw={predicted_cpu:.4f} ({predicted_cpu*100:.1f}%), "
+                    f"ood_alpha={alpha:.3f}, exposed={exposed:.4f} (limit={cpu_limit})",
                     level="INFO",
                     service="collector",
                 )
 
-                # Віддаємо прогнози в Prometheus
-                PREDICTED_CPU.set(predictions.cpu)
-                PREDICTED_RAM.set(predictions.ram)
-                PREDICTED_RPS.set(predictions.rps)
+                PREDICTED_CPU.set(exposed)
 
-                await api_client.save_new_prediction(
-                    "cpu", current_metrics["cpu"], predictions.cpu
+                saved = await api_client.save_new_prediction(
+                    input_cpu=current_metrics["cpu"],
+                    input_ram=current_metrics["ram"],
+                    input_rps=current_metrics["rps"],
+                    predicted_cpu=predicted_cpu,
                 )
-                await api_client.save_new_prediction(
-                    "ram", current_metrics["ram"], predictions.ram
-                )
-                await api_client.save_new_prediction(
-                    "rps", current_metrics["rps"], predictions.rps
-                )
+                if saved:
+                    pending_sync.append((saved.id, saved.target_ts))
         else:
             await send_system_log(
-                # 💡 ЗМІНА 5: Логіка очікування до 11 точок
-                f"   ⏳ Накопичення історії: {len(history_buffer)}/11. Прогноз пропускаємо.",
+                f"   ⏳ Накопичення історії: {len(history_buffer)}/{MODEL_INPUT_STEPS + 1}. Прогноз пропускаємо.",
                 level="INFO",
                 service="collector",
             )
@@ -216,7 +229,6 @@ async def main() -> None:
         service="collector",
     )
 
-    # Запускаємо сервер метрик Prometheus на порту 8001
     start_http_server(8001, addr="0.0.0.0")
     await send_system_log(
         "📡 Prometheus Exporter запущено на порту 8001 (/metrics)",
@@ -224,16 +236,15 @@ async def main() -> None:
         service="collector",
     )
     await restore_history_buffer()
+    await restore_pending_sync()
     loop = asyncio.get_event_loop()
     next_run_time = loop.time()
-    interval = 15
+    interval = 5
 
     while True:
-        # 1. Запитуємо свіжі налаштування з нашого API!
         sys_settings = await api_client.get_system_settings()
         is_active = sys_settings.is_collector_active
 
-        # 2. Перевіряємо, чи ввімкнений колектор
         if is_active:
             asyncio.create_task(process_metrics_task(sys_settings))
         else:
@@ -243,11 +254,9 @@ async def main() -> None:
                 service="collector",
             )
 
-        # 3. Розумний сліп (враховує можливі зміни інтервалу)
         next_run_time += interval
         sleep_time = next_run_time - loop.time()
 
-        # Якщо скрипт "забуксував" або інтервал різко зменшили
         if sleep_time <= 0:
             next_run_time = loop.time()
             sleep_time = interval

@@ -17,10 +17,11 @@ class MetricEntry(Base):
         primary_key=True,
     )
     target_ts = Column(DateTime(timezone=True), index=True)
-    resource = Column(String)  # 'cpu', 'ram', 'rps'
-    input_value = Column(Float)
-    predicted_value = Column(Float)
-    actual_value = Column(Float, nullable=True)
+    input_cpu = Column(Float)
+    input_ram = Column(Float)
+    input_rps = Column(Float)
+    predicted_cpu = Column(Float)
+    actual_cpu = Column(Float, nullable=True)
     horizon_seconds = Column(Integer, default=60)
     model_version = Column(
         String(50), ForeignKey("lpa_models.version", ondelete="SET NULL"), nullable=True
@@ -58,21 +59,31 @@ class SystemSettings(Base):
 
     is_collector_active = Column(Boolean, default=False)
 
-    prometheus_url = Column(
-        String, default="http://host.docker.internal:9090/api/v1/query"
-    )
+    prometheus_url = Column(String, default="http://192.168.49.2:30090/api/v1/query")
 
     cpu_query = Column(
         String,
-        default='sum(rate(container_cpu_usage_seconds_total{pod=~"podinfo-.*", container!="POD"}[1m]))',
+        default=(
+            'sum(rate(container_cpu_usage_seconds_total{pod=~"cpu-service-.*", container!="POD"}[1m]))'
+            " / "
+            'sum(kube_pod_container_resource_limits{pod=~"cpu-service-.*", resource="cpu", container!="POD"})'
+        ),
     )
     ram_query = Column(
         String,
-        default='sum(container_memory_working_set_bytes{pod=~"podinfo-.*", container!="POD"}) / 1024 / 1024',
+        default='sum(container_memory_working_set_bytes{pod=~"cpu-service-.*", container!="POD"}) / 1024 / 1024',
     )
     rps_query = Column(
-        String, default='sum(rate(http_requests_total{pod=~"podinfo-.*"}[1m]))'
+        String, default='sum(rate(http_requests_total{pod=~"cpu-service-.*"}[30s]))'
     )
+    prediction_cpu_limit = Column(Float, default=1.0)
+
+
+class RawCpuReading(Base):
+    __tablename__ = "lpa_raw_cpu"
+
+    ts = Column(DateTime(timezone=True), primary_key=True)
+    cpu_value = Column(Float, nullable=False)
 
 
 class SystemLog(Base):

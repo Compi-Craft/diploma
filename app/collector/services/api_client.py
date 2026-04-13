@@ -1,3 +1,4 @@
+import datetime
 from typing import Dict, List
 
 from config import API_URL, PREDICTOR_URL
@@ -10,60 +11,61 @@ from shared.schemas import (
     PredictData,
     PredictionRequest,
     PredictionResponse,
+    RawCpuCreate,
     SettingsRead,
-    SyncActualData,
 )
 from shared.utils import async_http_request
 
 
-async def sync_actual_values(resource: str, current_val: float) -> None:
-    """Відправляє HTTP запит до API для оновлення actual_value"""
-    url = f"{API_URL}/metrics/sync"
-    responce = await async_http_request(
+async def save_raw_reading(ts: datetime.datetime, cpu_value: float) -> None:
+    """Зберігає сире вимірювання CPU з міткою часу."""
+    await async_http_request(
+        method="POST",
+        url=f"{API_URL}/metrics/raw",
+        payload=RawCpuCreate(ts=ts, cpu_value=cpu_value),
+        response_model=GenericResponse,
+    )
+
+
+async def sync_by_id(row_id: int) -> None:
+    """Тригерить sync для рядка — API сам знайде точне значення з raw_cpu_readings."""
+    url = f"{API_URL}/metrics/{row_id}/actual"
+    response = await async_http_request(
         method="PUT",
         url=url,
-        payload=SyncActualData(resource=resource, actual_value=current_val),
-        response_model=GenericResponse,  # Ми не очікуємо конкретної структури відповіді, тому використовуємо GenericResponse
+        response_model=GenericResponse,
     )
-    if responce and responce.status == "success":
+    if not response or response.status != "success":
         await send_system_log(
-            f"✅ Actual value synced for {resource}",
-            level="INFO",
-            service="collector",
-        )
-    else:
-        await send_system_log(
-            f"⚠️ Failed to sync actual value for {resource}: {responce.message if responce else 'No response'}",
+            f"⚠️ Failed to sync row {row_id}: {response.message if response else 'No response'}",
             level="ERROR",
             service="collector",
         )
 
 
-async def save_new_prediction(resource: str, val: float, pred: float) -> None:
-    """Відправляє HTTP запит до API для збереження нового прогнозу"""
+async def save_new_prediction(
+    input_cpu: float, input_ram: float, input_rps: float, predicted_cpu: float
+) -> MetricRead | None:
+    """Зберігає новий прогноз. Повертає збережений рядок (з id) або None."""
     url = f"{API_URL}/metrics/predict"
-    responce = await async_http_request(
+    response = await async_http_request(
         method="POST",
         url=url,
         payload=PredictData(
-            resource=resource,
-            input_value=val,
-            predicted_value=pred,
+            input_cpu=input_cpu,
+            input_ram=input_ram,
+            input_rps=input_rps,
+            predicted_cpu=predicted_cpu,
         ),
         response_model=MetricRead,
     )
-    if responce:
+    if not response:
         await send_system_log(
-            f"✅ New prediction saved for {resource}: {pred:.2f}",
-            level="INFO",
-            service="collector",
-        )
-    else:
-        await send_system_log(
-            f"⚠️ Failed to save new prediction for {resource}",
+            "⚠️ Failed to save prediction",
             level="ERROR",
             service="collector",
         )
+    return response
 
 
 async def get_system_settings() -> SettingsRead:
@@ -73,43 +75,43 @@ async def get_system_settings() -> SettingsRead:
     return response
 
 
-async def get_recent_history(resource: str, limit: int = 10) -> list[MetricRead]:
-    """Отримує останні N записів з бази для конкретного ресурсу."""
-    # Переконайся, що API_BASE_URL вказує на твій API сервіс
+async def get_unsynced_rows() -> list[MetricRead]:
+    """Повертає рядки де actual_cpu IS NULL і target_ts вже минув."""
     resp = await async_http_request(
         method="GET",
-        url=f"{API_URL}/metrics/history?resource={resource}&limit={limit}",
-        payload=MetricHistoryRead(resource=resource, limit=limit),
-        response_model=list[
-            MetricRead
-        ],  # Очікуємо список словників з полями ts, resource, actual_value
+        url=f"{API_URL}/metrics/unsynced",
+        response_model=list[MetricRead],
     )
-    return resp
+    return resp if resp else []
 
 
-async def get_prediction(history: list[dict[str, float]]) -> MetricPoint | None:
+async def get_recent_history(limit: int = 9) -> list[MetricRead]:
+    """Отримує останні N записів з бази для відновлення буфера."""
+    resp = await async_http_request(
+        method="GET",
+        url=f"{API_URL}/metrics/history",
+        payload=MetricHistoryRead(limit=limit),
+        response_model=list[MetricRead],
+    )
+    return resp if resp else []
+
+
+async def get_prediction(history: list[dict[str, float]]) -> float | None:
     """
-    Відправляє вікно з 10 останніх вимірів до LSTM сервісу.
-    Очікує отримати комплексний прогноз для всіх метрик.
-
-    :param history: Список з 10 словників, наприклад: [{"cpu": 0.1, "ram": 10.0, "rps": 150.0}, ...]
-    :return: Об'єкт MetricPoint з прогнозами або None у разі помилки.
+    Відправляє вікно з 11 останніх вимірів до LSTM сервісу.
+    Повертає прогноз CPU (float) або None у разі помилки.
     """
-
-    # 🌟 МАГІЯ ТУТ: Перетворюємо список словників на список Pydantic-моделей
-    # Використовуємо розпакування **point, оскільки point - це звичайний словник
     history_points = [MetricPoint.model_validate(point) for point in history]
 
     response = await async_http_request(
         method="POST",
         url=f"{PREDICTOR_URL}/predict",
-        # Передаємо вже підготовлений список об'єктів
         payload=PredictionRequest(history=history_points),
         response_model=PredictionResponse,
     )
 
     if response:
-        return response.predicted_values
+        return response.predicted_cpu
 
     await send_system_log(
         "⚠️ Predictor API Error: No response received",

@@ -13,7 +13,10 @@ async def notify_predictor_to_reload(
     """Фонова задача: надсилає POST-запит до мікросервісу Предиктора"""
     try:
         request_object = ReloadRequest(
-            version=version, model_path=model_path, scaler_x_path=scaler_x_path, scaler_y_path=scaler_y_path
+            version=version,
+            model_path=model_path,
+            scaler_x_path=scaler_x_path,
+            scaler_y_path=scaler_y_path,
         )
         responce = await async_http_request(
             method="POST",

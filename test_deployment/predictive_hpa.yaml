@@ -5,30 +5,44 @@ metadata:
   namespace: default
 spec:
   scaleTargetRef:
-    name: podinfo # Ім'я твого деплойменту
+    name: cpu-service # Ім'я деплойменту
   minReplicaCount: 1
-  maxReplicaCount: 10
-  cooldownPeriod: 60 # Захист від флаппінгу
+  maxReplicaCount: 15
+  pollingInterval: 15   # Опитувати метрики кожні 5 секунд (дефолт KEDA = 30s)
+  cooldownPeriod: 30  # Швидкий downscale після падіння навантаження
   advanced:
     restoreToOriginalReplicaCount: true
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          policies:
+          - type: Pods
+            value: 2          # max 2 поди за раз
+            periodSeconds: 30 # не частіше ніж раз на 30 секунд
+        scaleDown:
+          stabilizationWindowSeconds: 30  # чекати 30s перед downscale (дефолт K8s = 300s)
   triggers:
-  
+
   # ---------------------------------------------------------
   # 1. ПРОАКТИВНИЙ ТРИГЕР (Мозок / Штучний інтелект)
   # ---------------------------------------------------------
   - type: prometheus
+    metricType: AverageValue  # scale until fleet-avg predicted CPU < threshold
     metadata:
-      serverAddress: http://prometheus-kube-prometheus-prometheus.default.svc.cluster.local:9090
-      metricName: gru_predicted_cpu_cores
-      query: max(gru_predicted_cpu_cores)
-      # 💡 Поріг прогнозу (наприклад, 0.15 ядра, як ми говорили раніше)
-      threshold: '0.05' 
+      serverAddress: http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
+      metricName: gru_predicted_cpu_util
+      query: max(gru_predicted_cpu_util) * 100 * scalar(kube_deployment_status_replicas_ready{deployment="cpu-service",namespace="default"})
+      # 💡 desired = ceil(prediction% × readyPods / threshold)
+      # Стабілізується коли prediction < threshold (50%) — без жодного ділення від KEDA
+      # Більше подів → CPU падає → модель предиктить нижче → metric падає → стабілізація
+      # OOD guard при idle: metric ≈ 1×N → ceil(N/50)=1 → scale down до 1
+      threshold: '50'
 
   # ---------------------------------------------------------
   # 2. РЕАКТИВНИЙ ТРИГЕР (Рятівне коло / Базовий K8s)
   # ---------------------------------------------------------
   - type: cpu
-    metricType: Utilization
+    metricType: AverageValue
     metadata:
-      # 💡 Скейлити, якщо РЕАЛЬНИЙ процесор перевищив 60% від ліміту (resources.requests.cpu)
-      value: "60"
+      # Відповідає vanilla_hpa.yaml: скейлити коли avg CPU > 500m на под
+      value: "500"

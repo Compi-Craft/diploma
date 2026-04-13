@@ -6,6 +6,8 @@ PREDICTOR_URL: str = os.getenv("PREDICTOR_URL", "http://lstm-predictor:6000")
 MODELS_DIR: str = os.getenv("MODELS_DIR", "/app/lstm_module/ml_models")
 SCALERS_DIR: str = os.getenv("SCALERS_DIR", "/app/lstm_module/scalers")
 
+MODEL_INPUT_STEPS: int = int(os.getenv("MODEL_INPUT_STEPS", "8"))
+MODEL_FEATURES: int = int(os.getenv("MODEL_FEATURES", "4"))
 
 os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(SCALERS_DIR, exist_ok=True)

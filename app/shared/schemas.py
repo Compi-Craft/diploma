@@ -16,7 +16,6 @@ class Health(BaseModel):
 
 class MetricPoint(BaseModel):
     cpu: float = Field(ge=0)
-    ram: float = Field(ge=0)
     rps: float = Field(ge=0)
 
 
@@ -26,7 +25,7 @@ class PredictionRequest(BaseModel):
 
 class PredictionResponse(BaseModel):
     version: str
-    predicted_values: MetricPoint
+    predicted_cpu: float
 
 
 class StatusResponse(BaseModel):
@@ -49,49 +48,45 @@ class RetrainCommand(BaseModel):
     batch_size: int = 16
 
 
-class MetricBase(BaseModel):
-    resource: str
-    input_value: float
-    predicted_value: float
+class PredictData(BaseModel):
+    input_cpu: float
+    input_ram: float
+    input_rps: float
+    predicted_cpu: float
     horizon_seconds: int = 60
 
 
-class MetricCreate(MetricBase):
-    pass
-
-
-class MetricRead(MetricBase):
+class MetricRead(BaseModel):
     id: int
     ts: datetime
     target_ts: datetime
-    actual_value: Optional[float]
+    input_cpu: float
+    input_ram: float
+    input_rps: float
+    predicted_cpu: float
+    actual_cpu: Optional[float]
+    horizon_seconds: int
     model_version: str
 
-    # Дозволяє Pydantic працювати з об'єктами SQLAlchemy
     model_config = ConfigDict(from_attributes=True)
 
 
 class MetricHistoryRead(BaseModel):
-    resource: str
     limit: int = 50
 
 
 class MetricHistoryRangeRead(BaseModel):
-    resource: Optional[str] = None
     start_time: datetime
     end_time: datetime
 
 
 class SyncActualData(BaseModel):
-    resource: str
-    actual_value: float
+    actual_cpu: float
 
 
-class PredictData(BaseModel):
-    resource: str
-    input_value: float
-    predicted_value: float
-    horizon_seconds: int = 60
+class RawCpuCreate(BaseModel):
+    ts: datetime
+    cpu_value: float
 
 
 class ModelCreate(BaseModel):
@@ -138,6 +133,7 @@ class SettingsUpdate(BaseModel):
     cpu_query: str
     ram_query: str
     rps_query: str
+    prediction_cpu_limit: float = 1.0
 
 
 class SettingsRead(SettingsUpdate):

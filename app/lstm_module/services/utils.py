@@ -1,5 +1,3 @@
-from typing import Dict
-
 import numpy as np
 from config import API_URL
 from services.model_manager import model_manager
@@ -32,19 +30,19 @@ async def run_finetune_pipeline(cmd: RetrainCommand) -> None:
             method="GET",
             url=url,
             payload=payload,
-            response_model=list[MetricRead],  # Ми очікуємо список словників з полями
+            response_model=list[MetricRead],
         )
         if history_data is None:
             await send_system_log(
-                f"❌ Не вдалося завантажити дані для донавчання",
+                "❌ Не вдалося завантажити дані для донавчання",
                 level="ERROR",
                 service="lstm_module",
             )
             return
-        raw_array = await prepare_finetune_data(history_data)
+        raw_array = prepare_finetune_data(history_data)
         if len(raw_array) < 50:
             await send_system_log(
-                f"❌ Замало повних даних для донавчання: {len(raw_array)} точок.",
+                f"❌ Замало даних для донавчання: {len(raw_array)} точок.",
                 level="ERROR",
                 service="lstm_module",
             )
@@ -71,95 +69,44 @@ async def run_finetune_pipeline(cmd: RetrainCommand) -> None:
         )
 
 
-async def prepare_finetune_data(
-    history_data: list[MetricRead], interval_sec: int = 15
+def prepare_finetune_data(
+    history_data: list[MetricRead], interval_sec: int = 5
 ) -> np.ndarray:
-    history_data.sort(key=lambda x: x.ts)  # Сортуємо за часом
+    """
+    Конвертує список MetricRead з БД у numpy масив (N, 2) для fine-tuning.
+    Використовує input_cpu (CPU на момент ts) і input_rps — обидва з одного моменту часу.
+    actual_cpu НЕ використовується тут: таргет будується в fine_tune_specific через shift(-12).
+    Виконує лінійну інтерполяцію для пропущених інтервалів.
+    """
+    history_data.sort(key=lambda x: x.ts)
 
     raw_values = []
-    current_bucket: Dict[str, float] = {}
     last_ts = None
-
-    # Додаємо трекінг часу для бакетів
-    bucket_start_ts = None
-    last_appended_ts = None
 
     for item in history_data:
         current_ts = item.ts
-        res = item.resource
-        val = item.actual_value
-
-        # Пропускаємо порожні значення ще на вході
-        if val is None:
+        if item.input_cpu is None or item.input_rps is None:
             continue
 
-        # Якщо це перша точка АБО з моменту минулої пройшло більше 2 секунд (новий бакет)
-        if last_ts is None or (current_ts - last_ts).total_seconds() > 2.0:
+        current_record = [item.input_cpu, item.input_rps]
 
-            # 1. Зберігаємо попередній бакет, якщо він повний
-            if (
-                "cpu" in current_bucket
-                and "ram" in current_bucket
-                and "rps" in current_bucket
-            ):
+        # Інтерполяція пропущених кроків
+        if last_ts is not None and len(raw_values) > 0:
+            gap_seconds = (current_ts - last_ts).total_seconds()
+            missing_steps = int(round(gap_seconds / interval_sec)) - 1
 
-                # 🛠️ МАГІЯ ВІДНОВЛЕННЯ ДАНИХ (Forward Fill)
-                if last_appended_ts is not None and bucket_start_ts is not None:
-                    gap_seconds = (bucket_start_ts - last_appended_ts).total_seconds()
-
-                    # Рахуємо, скільки 15-секундних інтервалів ми пропустили
-                    # round() допоможе уникнути проблем, якщо gap = 29.8 секунд
-                    missing_steps = int(round(gap_seconds / interval_sec)) - 1
-
-                    # Якщо пропустили від 1 до 10 кроків (до 2.5 хвилин "дірки")
-                    if 0 < missing_steps <= 10 and len(raw_values) > 0:
-                        last_good_record = raw_values[-1]
-                        current_record = [
-                            current_bucket["cpu"],
-                            current_bucket["ram"],
-                            current_bucket["rps"],
-                        ]
-
-                        # Кількість відрізків між точками - це кількість пропущених кроків + 1
-                        total_segments = missing_steps + 1
-
-                        # Генеруємо плавні переходи
-                        for step in range(1, missing_steps + 1):
-                            interpolated_record = []
-                            # Проходимось по всіх трьох метриках (cpu=0, ram=1, rps=2)
-                            for i in range(3):
-                                diff = current_record[i] - last_good_record[i]
-                                step_increment = diff / total_segments
-                                interpolated_value = last_good_record[i] + (
-                                    step_increment * step
-                                )
-                                interpolated_record.append(interpolated_value)
-
-                            raw_values.append(interpolated_record)
-
-                # Записуємо поточний бакет
-                raw_values.append(
-                    [
-                        current_bucket["cpu"],
-                        current_bucket["ram"],
-                        current_bucket["rps"],
+            if 0 < missing_steps <= 10:
+                last_good = raw_values[-1]
+                total_segments = missing_steps + 1
+                for step in range(1, missing_steps + 1):
+                    interpolated = [
+                        last_good[i]
+                        + (current_record[i] - last_good[i]) * step / total_segments
+                        for i in range(2)
                     ]
-                )
-                last_appended_ts = bucket_start_ts
+                    raw_values.append(interpolated)
 
-            # 2. Очищаємо бакет і фіксуємо час початку нового
-            current_bucket = {}
-            bucket_start_ts = current_ts
-
-        # 3. Наповнюємо поточний бакет
-        current_bucket[res] = val
+        raw_values.append(current_record)
         last_ts = current_ts
 
-    # Не забуваємо про останній бакет у кінці циклу
-    if "cpu" in current_bucket and "ram" in current_bucket and "rps" in current_bucket:
-        # Тут теж можна додати перевірку на gap, але для останнього бакета це зазвичай не критично
-        raw_values.append(
-            [current_bucket["cpu"], current_bucket["ram"], current_bucket["rps"]]
-        )
-
-    return np.array(raw_values)
+    return np.array(raw_values) if raw_values else np.array([]).reshape(0, 2)

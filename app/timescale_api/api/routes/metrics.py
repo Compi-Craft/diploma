@@ -7,46 +7,59 @@ from shared.schemas import (
     MetricHistoryRead,
     MetricRead,
     PredictData,
-    SyncActualData,
+    RawCpuCreate,
 )
-from sqlalchemy import update
+from sqlalchemy import func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from ..database import get_db
-from ..models import MetricEntry, ModelRegistry
+from ..models import MetricEntry, ModelRegistry, RawCpuReading
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
 
 
-@router.put("/sync", response_model=GenericResponse)
-async def sync_actual_values(
-    data: SyncActualData, db: AsyncSession = Depends(get_db)
+@router.post("/raw", response_model=GenericResponse)
+async def save_raw_cpu(
+    data: RawCpuCreate, db: AsyncSession = Depends(get_db)
+) -> GenericResponse:
+    """[Internal] Зберігає сире вимірювання CPU з міткою часу."""
+    reading = RawCpuReading(ts=data.ts, cpu_value=data.cpu_value)
+    db.add(reading)
+    await db.commit()
+    return GenericResponse(status="success", message="Raw reading saved")
+
+
+@router.put("/{row_id}/actual", response_model=GenericResponse)
+async def sync_actual_by_id(
+    row_id: int, db: AsyncSession = Depends(get_db)
 ) -> GenericResponse:
     """
-    [Internal] Оновлює actual_value для минулих прогнозів, час яких настав.
-    Викликається Воркером.
+    [Internal] Знаходить у raw_cpu_readings значення найближче до target_ts
+    і записує його як actual_cpu. Точне навіть після рестарту.
     """
-    now = datetime.datetime.now(datetime.timezone.utc)
+    row_result = await db.execute(select(MetricEntry).where(MetricEntry.id == row_id))
+    row = row_result.scalar_one_or_none()
+    if not row or row.actual_cpu is not None:
+        return GenericResponse(status="success", message="Nothing to sync")
 
-    # Шукаємо записи, де target_ts знаходиться в межах +/- 5 секунд від часу виміру
+    closest_result = await db.execute(
+        select(RawCpuReading)
+        .order_by(func.abs(func.extract("epoch", RawCpuReading.ts - row.target_ts)))
+        .limit(1)
+    )
+    closest = closest_result.scalar_one_or_none()
+    if not closest:
+        return GenericResponse(status="error", message="No raw readings available")
+
     stmt = (
         update(MetricEntry)
-        .where(MetricEntry.resource == data.resource)
-        .where(MetricEntry.actual_value.is_(None))
-        .where(
-            MetricEntry.target_ts.between(
-                now - datetime.timedelta(seconds=5), now + datetime.timedelta(seconds=5)
-            )
-        )
-        .values(actual_value=data.actual_value)
+        .where(MetricEntry.id == row_id)
+        .values(actual_cpu=closest.cpu_value)
     )
-
     await db.execute(stmt)
     await db.commit()
-    return GenericResponse(
-        status="success", message=f"Actual values synced for {data.resource}"
-    )
+    return GenericResponse(status="success", message=f"Row {row_id} synced")
 
 
 @router.post("/predict", response_model=MetricRead)
@@ -57,30 +70,25 @@ async def save_new_prediction(
     [Internal] Зберігає новий прогноз від LSTM сервісу.
     Викликається Воркером.
     """
-
-    # 1. Дістаємо версію поточної активної моделі
-    # Використовуємо .where(ModelRegistry.is_active == True)
     query = select(ModelRegistry.version).filter(ModelRegistry.is_active == True)
     result = await db.execute(query)
     active_version = result.scalar_one_or_none()
 
-    # На випадок (дуже малоймовірний), якщо активної моделі в базі чомусь немає
     if not active_version:
         active_version = "unknown-model"
 
-    # 2. Вираховуємо час, на який зроблено прогноз
     current_time = datetime.datetime.now(datetime.timezone.utc)
     target_time = current_time + datetime.timedelta(seconds=data.horizon_seconds)
 
-    # 3. Зберігаємо запис із прив'язкою до версії моделі
     new_entry = MetricEntry(
-        resource=data.resource,
         ts=current_time,
-        input_value=data.input_value,
-        predicted_value=data.predicted_value,
         target_ts=target_time,
+        input_cpu=data.input_cpu,
+        input_ram=data.input_ram,
+        input_rps=data.input_rps,
+        predicted_cpu=data.predicted_cpu,
         horizon_seconds=data.horizon_seconds,
-        model_version=active_version,  # 👈 ДОДАЛИ СЮДИ!
+        model_version=active_version,
     )
 
     db.add(new_entry)
@@ -90,19 +98,33 @@ async def save_new_prediction(
     return MetricRead.model_validate(new_entry)
 
 
+@router.get("/unsynced", response_model=list[MetricRead])
+async def get_unsynced(db: AsyncSession = Depends(get_db)) -> list[MetricRead]:
+    """
+    [Internal] Повертає рядки де actual_cpu IS NULL і target_ts вже минув.
+    Використовується колектором при старті для відновлення pending_sync.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc)
+    query = (
+        select(MetricEntry)
+        .where(MetricEntry.actual_cpu.is_(None))
+        .where(MetricEntry.target_ts < now)
+        .order_by(MetricEntry.target_ts.asc())
+    )
+    result = await db.execute(query)
+    return [MetricRead.model_validate(m) for m in result.scalars().all()]
+
+
 @router.get("/history", response_model=list[MetricRead])
 async def get_history(
     history_read: MetricHistoryRead, db: AsyncSession = Depends(get_db)
 ) -> list[MetricRead]:
     """Повертає історію метрик для графіків (Дашборд / Grafana)."""
     query = (
-        select(MetricEntry)
-        .filter(MetricEntry.resource == history_read.resource)
-        .order_by(MetricEntry.ts.desc())
-        .limit(history_read.limit)
+        select(MetricEntry).order_by(MetricEntry.ts.desc()).limit(history_read.limit)
     )
     result = await db.execute(query)
-    orm_metrics = result.scalars().all()  # Це список об'єктів MetricEntry
+    orm_metrics = result.scalars().all()
     return [MetricRead.model_validate(metric) for metric in orm_metrics]
 
 
@@ -113,14 +135,12 @@ async def get_history_by_range(
 ) -> list[MetricRead]:
     query = (
         select(MetricEntry)
-        .filter(MetricEntry.actual_value.isnot(None))
+        .filter(MetricEntry.actual_cpu.isnot(None))
         .filter(MetricEntry.ts >= history_range_read.start_time)
         .filter(MetricEntry.ts <= history_range_read.end_time)
         .order_by(MetricEntry.ts.asc())
     )
-    if history_range_read.resource:
-        query = query.filter(MetricEntry.resource == history_range_read.resource)
 
     result = await db.execute(query)
-    orm_metrics = result.scalars().all()  # Це список об'єктів MetricEntry
+    orm_metrics = result.scalars().all()
     return [MetricRead.model_validate(metric) for metric in orm_metrics]
