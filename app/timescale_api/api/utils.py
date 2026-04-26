@@ -8,46 +8,48 @@ from shared.utils import async_http_request
 
 
 async def notify_predictor_to_reload(
-    version: str, model_path: str, scaler_x_path: str, scaler_y_path: str
+    version: str,
+    model_path: str,
+    scaler_x_path: str,
+    window_size: int,
+    forecast_horizon: int,
 ) -> None:
-    """Фонова задача: надсилає POST-запит до мікросервісу Предиктора"""
+    """Background task: sends a reload signal to the predictor service."""
     try:
         request_object = ReloadRequest(
             version=version,
             model_path=model_path,
             scaler_x_path=scaler_x_path,
-            scaler_y_path=scaler_y_path,
+            window_size=window_size,
+            forecast_horizon=forecast_horizon,
         )
-        responce = await async_http_request(
+        response = await async_http_request(
             method="POST",
             url=f"{PREDICTOR_URL}/reload",
             payload=request_object,
             response_model=GenericResponse,
         )
-        if responce:
+        if response:
             await send_system_log(
-                f"✅ Предиктор успішно отримав команду на Hot Swap до {version}",
+                f"Predictor hot-swapped to {version}",
                 level="INFO",
                 service="timescale_api",
             )
         else:
             await send_system_log(
-                f"❌ Предиктор повернув помилку при спробі Hot Swap до {version}: {responce.message}",
+                f"Predictor returned an error on hot-swap to {version}",
                 level="ERROR",
                 service="timescale_api",
             )
     except Exception as e:
         await send_system_log(
-            f"❌ Помилка з'єднання з Предиктором: {e}",
+            f"Failed to reach predictor: {e}",
             level="ERROR",
             service="timescale_api",
         )
 
 
 def generate_model_version() -> str:
-    """Генерує унікальну версію формату: v20260301-153022-a1b2"""
-    # Беремо поточний UTC час
     timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
-    # Беремо перші 4 символи випадкового UUID
     short_hash = uuid.uuid4().hex[:4]
     return f"v{timestamp}-{short_hash}"

@@ -3,10 +3,8 @@ import requests
 from config import API_URL
 
 
-async def send_system_log(
-    message: str, level: str, service: str = "collector_worker"
-) -> None:
-    """Відправляє системний лог до центральної БД."""
+async def send_system_log(message: str, level: str, service: str = "collector") -> None:
+    """Send a log entry to the central DB."""
     print(message)
     url = f"{API_URL}/logs"
     payload = {"level": level, "service": service, "message": message}
@@ -14,21 +12,16 @@ async def send_system_log(
         async with aiohttp.ClientSession() as session:
             await session.post(url, json=payload)
     except Exception as e:
-        # Якщо сам API логів впав, просто принтимо в консоль
-        print(f"Failed to send log to API: {e} | Original message: {message}")
+        print(f"Failed to send log to API: {e} | Original: {message}")
 
 
 def send_system_log_sync(
-    message: str, level: str = "INFO", service: str = "lstm_module"
+    message: str, level: str = "INFO", service: str = "predictor"
 ) -> None:
-    """
-    Синхронна функція для відправки логів.
-    Ідеально підходить для важких ML-функцій, щоб не конфліктувати з asyncio.
-    """
-    url = f"{API_URL}/logs"  # Переконайся, що URL правильний
+    """Synchronous log sender for use inside heavy ML functions that run outside asyncio."""
+    url = f"{API_URL}/logs"
     payload = {"level": level, "service": service, "message": message}
     try:
-        # Ставимо таймаут 2 секунди, щоб логування ніколи не "підвісило" модель
         requests.post(url, json=payload, timeout=2)
     except Exception as e:
-        print(f"⚠️ Не вдалося відправити лог у БД: {e} | Повідомлення: {message}")
+        print(f"Failed to send log: {e} | Message: {message}")

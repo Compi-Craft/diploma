@@ -11,7 +11,7 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 
 @router.get("", response_model=SettingsRead)
 async def get_settings(db: AsyncSession = Depends(get_db)) -> SettingsRead:
-    """Отримує поточні налаштування. Якщо їх ще немає — створює дефолтні."""
+    """Return current settings, creating the default row if it does not exist."""
     query = select(SystemSettings).filter(SystemSettings.id == 1)
     result = await db.execute(query)
     settings = result.scalar_one_or_none()
@@ -27,17 +27,15 @@ async def get_settings(db: AsyncSession = Depends(get_db)) -> SettingsRead:
 async def update_settings(
     settings_in: SettingsUpdate, db: AsyncSession = Depends(get_db)
 ) -> SettingsRead:
-    """Оновлює налаштування системи (викликається з Дашборду)."""
+    """Update system settings (called from the Dashboard)."""
     query = select(SystemSettings).filter(SystemSettings.id == 1)
     result = await db.execute(query)
     settings = result.scalar_one_or_none()
 
     if not settings:
-        # Якщо чомусь рядка немає, створюємо його з переданими даними
         settings = SystemSettings(id=1, **settings_in.model_dump())
         db.add(settings)
     else:
-        # Оновлюємо існуючий рядок
         for key, value in settings_in.model_dump().items():
             setattr(settings, key, value)
 

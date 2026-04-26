@@ -12,12 +12,15 @@ spec:
   maxReplicas: 15
   behavior:
     scaleUp:
+      # No rate limit — scale to desired replicas in one step.
+      # Isolates detection speed as the only variable vs predictive_hpa_stress.yaml.
+      selectPolicy: Max
       policies:
       - type: Pods
-        value: 2          # max 2 поди за раз
-        periodSeconds: 30 # не частіше ніж раз на 30 секунд
+        value: 15
+        periodSeconds: 15
     scaleDown:
-      stabilizationWindowSeconds: 30  # чекати 30s перед downscale (дефолт K8s = 300s)
+      stabilizationWindowSeconds: 30
   metrics:
   - type: Resource
     resource:

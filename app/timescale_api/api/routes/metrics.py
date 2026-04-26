@@ -23,7 +23,7 @@ router = APIRouter(prefix="/metrics", tags=["metrics"])
 async def save_raw_cpu(
     data: RawCpuCreate, db: AsyncSession = Depends(get_db)
 ) -> GenericResponse:
-    """[Internal] Зберігає сире вимірювання CPU з міткою часу."""
+    """[Internal] Store a raw CPU reading with its timestamp."""
     reading = RawCpuReading(ts=data.ts, cpu_value=data.cpu_value)
     db.add(reading)
     await db.commit()
@@ -35,8 +35,8 @@ async def sync_actual_by_id(
     row_id: int, db: AsyncSession = Depends(get_db)
 ) -> GenericResponse:
     """
-    [Internal] Знаходить у raw_cpu_readings значення найближче до target_ts
-    і записує його як actual_cpu. Точне навіть після рестарту.
+    [Internal] Find the raw_cpu_readings value closest to target_ts and write it
+    as actual_cpu. Accurate even after a service restart.
     """
     row_result = await db.execute(select(MetricEntry).where(MetricEntry.id == row_id))
     row = row_result.scalar_one_or_none()
@@ -67,8 +67,9 @@ async def save_new_prediction(
     data: PredictData, db: AsyncSession = Depends(get_db)
 ) -> MetricRead:
     """
-    [Internal] Зберігає новий прогноз від LSTM сервісу.
-    Викликається Воркером.
+    [Internal] Persist a new GRU prediction from the collector.
+    target_ts is computed as now + horizon_seconds, where horizon_seconds
+    equals forecast_horizon × collection_interval as reported by the predictor.
     """
     query = select(ModelRegistry.version).filter(ModelRegistry.is_active == True)
     result = await db.execute(query)
@@ -101,8 +102,8 @@ async def save_new_prediction(
 @router.get("/unsynced", response_model=list[MetricRead])
 async def get_unsynced(db: AsyncSession = Depends(get_db)) -> list[MetricRead]:
     """
-    [Internal] Повертає рядки де actual_cpu IS NULL і target_ts вже минув.
-    Використовується колектором при старті для відновлення pending_sync.
+    [Internal] Return rows where actual_cpu IS NULL and target_ts has already passed.
+    Used by the collector on startup to restore pending_sync.
     """
     now = datetime.datetime.now(datetime.timezone.utc)
     query = (
@@ -119,7 +120,7 @@ async def get_unsynced(db: AsyncSession = Depends(get_db)) -> list[MetricRead]:
 async def get_history(
     history_read: MetricHistoryRead, db: AsyncSession = Depends(get_db)
 ) -> list[MetricRead]:
-    """Повертає історію метрик для графіків (Дашборд / Grafana)."""
+    """Return recent metric history for the Dashboard and Grafana."""
     query = (
         select(MetricEntry).order_by(MetricEntry.ts.desc()).limit(history_read.limit)
     )

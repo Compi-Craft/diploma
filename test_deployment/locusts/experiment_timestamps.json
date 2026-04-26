@@ -1,0 +1,322 @@
+{
+  "round_a": {
+    "1. Linear Ramp": {
+      "start_unix": 1775647114.358116,
+      "end_unix": 1775647714.358116,
+      "start_str": "14:18:34"
+    },
+    "2. Step Function": {
+      "start_unix": 1775647834.358116,
+      "end_unix": 1775648434.358116,
+      "start_str": "14:30:34"
+    },
+    "3. Sine Wave": {
+      "start_unix": 1775648554.358116,
+      "end_unix": 1775649274.358116,
+      "start_str": "14:42:34"
+    },
+    "4. Multi Spike": {
+      "start_unix": 1775649394.358116,
+      "end_unix": 1775649994.358116,
+      "start_str": "14:56:34"
+    },
+    "5. Random Walk": {
+      "start_unix": 1775650114.358116,
+      "end_unix": 1775650714.358116,
+      "start_str": "15:08:34"
+    },
+    "6. Quiet + Burst": {
+      "start_unix": 1775650834.358116,
+      "end_unix": 1775651434.358116,
+      "start_str": "15:20:34"
+    }
+  },
+  "round_b": {
+    "1. Linear Ramp": {
+      "start_unix": 1775642679.4504883,
+      "end_unix": 1775643279.4504883,
+      "start_str": "13:04:39"
+    },
+    "2. Step Function": {
+      "start_unix": 1775643399.4504883,
+      "end_unix": 1775643999.4504883,
+      "start_str": "13:16:39"
+    },
+    "3. Sine Wave": {
+      "start_unix": 1775644119.4504883,
+      "end_unix": 1775644839.4504883,
+      "start_str": "13:28:39"
+    },
+    "4. Multi Spike": {
+      "start_unix": 1775644959.4504883,
+      "end_unix": 1775645559.4504883,
+      "start_str": "13:42:39"
+    },
+    "5. Random Walk": {
+      "start_unix": 1775645679.4504883,
+      "end_unix": 1775646279.4504883,
+      "start_str": "13:54:39"
+    },
+    "6. Quiet + Burst": {
+      "start_unix": 1775646399.4504883,
+      "end_unix": 1775646999.4504883,
+      "start_str": "14:06:39"
+    }
+  },
+  "round_a_mw2": {
+    "1. Linear Ramp": {
+      "start_unix": 1776435489.8537736,
+      "end_unix": 1776436089.8537736,
+      "start_str": "17:18:09"
+    },
+    "2. Step Function": {
+      "start_unix": 1776436209.8537736,
+      "end_unix": 1776436809.8537736,
+      "start_str": "17:30:09"
+    },
+    "3. Sine Wave": {
+      "start_unix": 1776436929.8537736,
+      "end_unix": 1776437649.8537736,
+      "start_str": "17:42:09"
+    },
+    "4. Multi Spike": {
+      "start_unix": 1776437769.8537736,
+      "end_unix": 1776438369.8537736,
+      "start_str": "17:56:09"
+    },
+    "5. Random Walk": {
+      "start_unix": 1776438489.8537736,
+      "end_unix": 1776439089.8537736,
+      "start_str": "18:08:09"
+    },
+    "6. Quiet + Burst": {
+      "start_unix": 1776439209.8537736,
+      "end_unix": 1776439809.8537736,
+      "start_str": "18:20:09"
+    }
+  },
+  "round_b_mw2": {
+    "1. Linear Ramp": {
+      "start_unix": 1776440024.3673325,
+      "end_unix": 1776440624.3673325,
+      "start_str": "18:33:44"
+    },
+    "2. Step Function": {
+      "start_unix": 1776440744.3673325,
+      "end_unix": 1776441344.3673325,
+      "start_str": "18:45:44"
+    },
+    "3. Sine Wave": {
+      "start_unix": 1776441464.3673325,
+      "end_unix": 1776442184.3673325,
+      "start_str": "18:57:44"
+    },
+    "4. Multi Spike": {
+      "start_unix": 1776442304.3673325,
+      "end_unix": 1776442904.3673325,
+      "start_str": "19:11:44"
+    },
+    "5. Random Walk": {
+      "start_unix": 1776443024.3673325,
+      "end_unix": 1776443624.3673325,
+      "start_str": "19:23:44"
+    },
+    "6. Quiet + Burst": {
+      "start_unix": 1776443744.3673325,
+      "end_unix": 1776444344.3673325,
+      "start_str": "19:35:44"
+    }
+  },
+  "round_a_mw2_2": {
+    "1. Linear Ramp": {
+      "start_unix": 1776871947.5971541,
+      "end_unix": 1776872547.5971541,
+      "start_str": "18:32:27"
+    },
+    "2. Step Function": {
+      "start_unix": 1776872847.5971541,
+      "end_unix": 1776873447.5971541,
+      "start_str": "18:47:27"
+    },
+    "3. Sine Wave": {
+      "start_unix": 1776873747.5971541,
+      "end_unix": 1776874467.5971541,
+      "start_str": "19:02:27"
+    },
+    "4. Multi Spike": {
+      "start_unix": 1776874767.5971541,
+      "end_unix": 1776875367.5971541,
+      "start_str": "19:19:27"
+    },
+    "5. Random Walk": {
+      "start_unix": 1776875667.5971541,
+      "end_unix": 1776876267.5971541,
+      "start_str": "19:34:27"
+    },
+    "6. Quiet + Burst": {
+      "start_unix": 1776876567.5971541,
+      "end_unix": 1776877167.5971541,
+      "start_str": "19:49:27"
+    }
+  },
+  "round_b_mw2_2": {
+    "1. Linear Ramp": {
+      "start_unix": 1776979001.9217775,
+      "end_unix": 1776979601.9217775,
+      "start_str": "00:16:41"
+    },
+    "2. Step Function": {
+      "start_unix": 1776979901.9217775,
+      "end_unix": 1776980501.9217775,
+      "start_str": "00:31:41"
+    },
+    "3. Sine Wave": {
+      "start_unix": 1776980801.9217775,
+      "end_unix": 1776981521.9217775,
+      "start_str": "00:46:41"
+    },
+    "4. Multi Spike": {
+      "start_unix": 1776981821.9217775,
+      "end_unix": 1776982421.9217775,
+      "start_str": "01:03:41"
+    },
+    "5. Random Walk": {
+      "start_unix": 1776982721.9217775,
+      "end_unix": 1776983321.9217775,
+      "start_str": "01:18:41"
+    },
+    "6. Quiet + Burst": {
+      "start_unix": 1776983621.9217775,
+      "end_unix": 1776984221.9217775,
+      "start_str": "01:33:41"
+    }
+  },
+  "round_a_mw2_3": {
+    "1. Linear Ramp": {
+      "start_unix": 1776956839.6283984,
+      "end_unix": 1776957439.6283984,
+      "start_str": "18:07:19"
+    },
+    "2. Step Function": {
+      "start_unix": 1776957739.6283984,
+      "end_unix": 1776958339.6283984,
+      "start_str": "18:22:19"
+    },
+    "3. Sine Wave": {
+      "start_unix": 1776958639.6283984,
+      "end_unix": 1776959359.6283984,
+      "start_str": "18:37:19"
+    },
+    "4. Multi Spike": {
+      "start_unix": 1776959659.6283984,
+      "end_unix": 1776960259.6283984,
+      "start_str": "18:54:19"
+    },
+    "5. Random Walk": {
+      "start_unix": 1776960559.6283984,
+      "end_unix": 1776961159.6283984,
+      "start_str": "19:09:19"
+    },
+    "6. Quiet + Burst": {
+      "start_unix": 1776961459.6283984,
+      "end_unix": 1776962059.6283984,
+      "start_str": "19:24:19"
+    }
+  },
+  "round_b_mw2_3": {
+    "1. Linear Ramp": {
+      "start_unix": 1776962220.080315,
+      "end_unix": 1776962820.080315,
+      "start_str": "19:37:00"
+    },
+    "2. Step Function": {
+      "start_unix": 1776963120.080315,
+      "end_unix": 1776963720.080315,
+      "start_str": "19:52:00"
+    },
+    "3. Sine Wave": {
+      "start_unix": 1776964020.080315,
+      "end_unix": 1776964740.080315,
+      "start_str": "20:07:00"
+    },
+    "4. Multi Spike": {
+      "start_unix": 1776965040.080315,
+      "end_unix": 1776965640.080315,
+      "start_str": "20:24:00"
+    },
+    "5. Random Walk": {
+      "start_unix": 1776965940.080315,
+      "end_unix": 1776966540.080315,
+      "start_str": "20:39:00"
+    },
+    "6. Quiet + Burst": {
+      "start_unix": 1776966840.080315,
+      "end_unix": 1776967440.080315,
+      "start_str": "20:54:00"
+    }
+  },
+  "round_a_mw2_4": {
+    "1. Linear Ramp": {
+      "start_unix": 1776967762.1787467,
+      "end_unix": 1776968362.1787467,
+      "start_str": "21:09:22"
+    },
+    "2. Step Function": {
+      "start_unix": 1776968662.1787467,
+      "end_unix": 1776969262.1787467,
+      "start_str": "21:24:22"
+    },
+    "3. Sine Wave": {
+      "start_unix": 1776969562.1787467,
+      "end_unix": 1776970282.1787467,
+      "start_str": "21:39:22"
+    },
+    "4. Multi Spike": {
+      "start_unix": 1776970582.1787467,
+      "end_unix": 1776971182.1787467,
+      "start_str": "21:56:22"
+    },
+    "5. Random Walk": {
+      "start_unix": 1776971482.1787467,
+      "end_unix": 1776972082.1787467,
+      "start_str": "22:11:22"
+    },
+    "6. Quiet + Burst": {
+      "start_unix": 1776972382.1787467,
+      "end_unix": 1776972982.1787467,
+      "start_str": "22:26:22"
+    }
+  },
+  "round_b_mw2_4": {
+    "1. Linear Ramp": {
+      "start_unix": 1776973170.1224494,
+      "end_unix": 1776973770.1224494,
+      "start_str": "22:39:30"
+    },
+    "2. Step Function": {
+      "start_unix": 1776974070.1224494,
+      "end_unix": 1776974670.1224494,
+      "start_str": "22:54:30"
+    },
+    "3. Sine Wave": {
+      "start_unix": 1776974970.1224494,
+      "end_unix": 1776975690.1224494,
+      "start_str": "23:09:30"
+    },
+    "4. Multi Spike": {
+      "start_unix": 1776975990.1224494,
+      "end_unix": 1776976590.1224494,
+      "start_str": "23:26:30"
+    },
+    "5. Random Walk": {
+      "start_unix": 1776976890.1224494,
+      "end_unix": 1776977490.1224494,
+      "start_str": "23:41:30"
+    },
+    "6. Quiet + Burst": {
+      "start_unix": 1776977790.1224494,
+      "end_unix": 1776978390.1224494,
+      "start_str": "23:56:30"
+    }
+  }
+}

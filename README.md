@@ -12,7 +12,7 @@ Prometheus (K8s)
       ▼
   Collector ──────────────────────────────────────────────────────────────────┐
       │                                                                        │
-      │  buffer last 9 points → POST /predict                                 │
+      │  buffer last 11 points → POST /predict                                │
       ▼                                                                        │
   GRU Predictor                                                               │
       │  4 features → GRU(64) → predicted_cpu_util (+60s)                     │
@@ -34,7 +34,7 @@ Prometheus (K8s)
 | Service | Port | Description |
 |---------|------|-------------|
 | `timescale_api` | **5000** | Central REST API — metric storage, model registry, settings |
-| `lstm-predictor` | **6000** | GRU inference service with hot-swap model loading |
+| `predictor` | **6000** | GRU inference service with hot-swap model loading |
 | `collector` | **8001** | Async worker — polls Prometheus every 5s, fills prediction buffer, exposes Prometheus gauge |
 | `dashboard` | **8501** | Streamlit UI — metrics charts, model registry, upload, settings, logs |
 | `timescaledb` | **5432** | PostgreSQL + TimescaleDB |
@@ -77,7 +77,7 @@ Wait ~30s for health checks, then open:
 3. Set PromQL queries for CPU, RAM and RPS
 4. Enable **Collector Active** → **Save**
 
-The collector starts gathering metrics within 5 seconds. Predictions begin after 21 points accumulate (~105s).
+The collector starts gathering metrics within 5 seconds. Predictions begin after 11 points accumulate (~55s).
 
 ---
 
@@ -87,8 +87,8 @@ The collector starts gathering metrics within 5 seconds. Predictions begin after
 1. Fetch CPU utilization [0,1] and RPS from Prometheus
 2. Save raw CPU reading (for later actual_cpu sync)
 3. Sync actual_cpu for past predictions where target_ts ≈ now
-4. Append {cpu_util, rps} to circular buffer (maxlen = MODEL_INPUT_STEPS + 1 = 9)
-5. When buffer is full (9 points):
+4. Append {cpu_util, rps} to circular buffer (maxlen = 51)
+5. When buffer has ≥ MODEL_INPUT_STEPS + 1 = 11 points:
      a. Build 4 features: pct_change(cpu), pct_change(rps), cpu_level, log1p(rps)
      b. POST /predict → GRU → predicted_cpu_util ∈ [0, 1]
      c. Set Prometheus gauge: gru_predicted_cpu_util
@@ -104,16 +104,16 @@ The collector starts gathering metrics within 5 seconds. Predictions begin after
 |-----------|-------|-------------|
 | Architecture | GRU(64) + Dropout(0.35) + Dense(1, sigmoid) | ~13K parameters |
 | Features | pct_change(cpu), pct_change(rps), cpu_level, log1p(rps) | 4 features, hardware-agnostic |
-| Input | 8 steps × 4 features (40s window) | scale-invariant velocity + level |
+| Input | 10 steps × 4 features (50s window) | scale-invariant velocity + level |
 | Output | cpu_util[t+12] point prediction ∈ [0, 1] | 60s ahead (sigmoid, no scaler_y) |
 | Loss | Quantile loss (q=0.75) | bias toward over-provisioning |
 
 ### Training workflow
 
 ```
-1. Run Locust scenarios against cpu-service with 1 fixed replica, NO HPA
+1. Run Locust against cpu-service with 1 fixed replica, NO HPA (locusts/locustfile_training.py)
    → collect clean RPS→CPU data via Collector → export from DB
-2. Train in notebooks/deep_learning_percentage_absolute_out.ipynb
+2. Train in notebooks/final_model_training.ipynb
    → produces: model.keras + scaler_X.joblib (no scaler_y needed)
 3. Upload via Dashboard → Upload Model (multipart: .keras + .joblib)
 4. Activate via Dashboard → Model Registry → Activate
@@ -165,7 +165,7 @@ The dual-trigger design ensures the system **cannot perform worse than vanilla H
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/predict` | Run inference; body: `{"history": [{cpu, rps} × 9]}` |
-| `POST` | `/reload` | Hot-swap model (no restart); body: `{version, model_path, scaler_x_path, scaler_y_path}` |
+| `POST` | `/reload` | Hot-swap model (no restart); body: `{version, model_path, scaler_x_path, window_size, forecast_horizon}` |
 | `POST` | `/retrain` | Start background fine-tuning |
 | `GET` | `/status` | Current model version and status |
 
@@ -178,10 +178,10 @@ The dual-trigger design ensures the system **cannot perform worse than vanilla H
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `API_URL` | `http://timescale_api:5000` | TimescaleAPI base URL |
-| `PREDICTOR_URL` | `http://lstm-predictor:6000` | GRU Predictor base URL |
-| `MODELS_DIR` | `/app/lstm_module/ml_models` | Model files directory |
-| `SCALERS_DIR` | `/app/lstm_module/scalers` | Scaler files directory |
-| `MODEL_INPUT_STEPS` | `8` | History window size (steps × 5s = 40s context) |
+| `PREDICTOR_URL` | `http://predictor:6000` | GRU Predictor base URL |
+| `MODELS_DIR` | `/app/predictor/ml_models` | Model files directory |
+| `SCALERS_DIR` | `/app/predictor/scalers` | Scaler files directory |
+| `MODEL_INPUT_STEPS` | `10` | History window size (steps × 5s = 50s context) |
 | `MODEL_FEATURES` | `4` | Number of input features (pct_cpu, pct_rps, cpu_level, rps_level) |
 
 All variables are defined in [app/config.py](app/config.py) and can be overridden via Docker environment.
@@ -194,14 +194,9 @@ Located in [test_deployment/locusts/](test_deployment/locusts/):
 
 | File | Description |
 |------|-------------|
-| `locustfile_scenarios.py` | All 6 scenarios in sequence (~72 min total) |
-| `scenario_1_linear_ramp.py` | Gradual 1→30 users over 10 min |
-| `scenario_2_step_function.py` | Sudden jumps between load levels |
-| `scenario_3_sine_wave.py` | Periodic sin² wave |
-| `scenario_4_multi_spike.py` | Short bursts with quiet pauses — best for showing predictive advantage |
-| `scenario_5_random_walk.py` | Unpredictable (seeded RNG) |
-| `scenario_6_quiet_burst.py` | Quiet baseline + rare large bursts — best for showing predictive advantage |
-| `run_all_scenarios.sh` | Runs all 6 with 2-min cooldown between |
+| `locustfile_training.py` | Single-replica data collection run (no HPA) — for model training |
+| `locustfile_scenarios.py` | All 6 scenarios in sequence — used for A/B experiment |
+| `locustfile_experiment.py` | Automated A/B runner with round tagging and timestamps |
 
 ### A/B comparison (Vanilla HPA vs Predictive KEDA)
 
@@ -215,6 +210,9 @@ locust -f locusts/locustfile_scenarios.py --headless -u 30 -r 5 --run-time 40m
 kubectl delete hpa --all
 kubectl apply -f test_deployment/predictive_hpa.yaml
 locust -f locusts/locustfile_scenarios.py --headless -u 30 -r 5 --run-time 40m
+
+# Or use the automated A/B runner
+locust -f locusts/locustfile_experiment.py --headless -u 30 -r 5
 ```
 
 Key metrics to compare: P99 latency during spike onset, scale-up lag, CPU throttling duration, wasted pod-seconds.
@@ -234,7 +232,7 @@ diploma/
 │   │       ├── routes/             # metrics.py, model.py, settings.py, logs.py
 │   │       ├── models.py           # ORM: MetricEntry, ModelRegistry, SystemSettings, SystemLog
 │   │       └── database.py
-│   ├── lstm_module/                # GRU Predictor microservice (FastAPI, port 6000)
+│   ├── predictor/                # GRU Predictor microservice (FastAPI, port 6000)
 │   │   ├── api/routes.py           # /predict, /reload, /retrain, /status
 │   │   ├── core/config.py          # PROJECT_NAME only
 │   │   └── services/
@@ -255,9 +253,11 @@ diploma/
 │   ├── scalers/                    # .joblib scaler files
 │   └── Dockerfile
 ├── notebooks/
-│   ├── deep_learning_percentage_absolute_out.ipynb  # Main training notebook (current production model)
-│   ├── hyperparam_search.ipynb                      # Walk-forward CV: window/horizon/feature search
-│   └── cpu_load_deployment.ipynb                    # EDA of collected dataset
+│   ├── final_model_training.ipynb          # Main training notebook (current production model)
+│   ├── hyperparam_search.ipynb             # Walk-forward CV: window/horizon/feature search
+│   ├── eda_final.ipynb                     # EDA of collected dataset
+│   ├── experiment_results_single_run.ipynb # A/B experiment analysis (single run)
+│   └── experiment_statistical.ipynb        # 3-run Wilcoxon statistical tests
 ├── test_deployment/
 │   ├── cpu-service.yaml            # Target deployment (bcrypt CPU load, startup 15s)
 │   ├── predictive_hpa.yaml         # KEDA ScaledObject (ML + CPU dual trigger)

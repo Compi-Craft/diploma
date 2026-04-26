@@ -13,7 +13,7 @@ class MetricEntry(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     ts = Column(
         DateTime(timezone=True),
-        default=datetime.datetime.now(datetime.timezone.utc),
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
         primary_key=True,
     )
     target_ts = Column(DateTime(timezone=True), index=True)
@@ -32,23 +32,17 @@ class MetricEntry(Base):
 class ModelRegistry(Base):
     __tablename__ = "lpa_models"
 
-    # ТУТ МАГІЯ: Передаємо функцію у default (БЕЗ дужок!)
     version = Column(String(50), primary_key=True, default=generate_model_version)
-
     created_at = Column(
-        DateTime(timezone=True), default=datetime.datetime.now(datetime.timezone.utc)
+        DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
     )
-
-    # Метрики якості моделі
     mse = Column(Float, nullable=True)
     mae = Column(Float, nullable=True)
-
-    # Шляхи до файлів у Docker-контейнері
     model_path = Column(String, nullable=False)
     scaler_x_path = Column(String, nullable=False)
-    scaler_y_path = Column(String, nullable=False)
-
-    # Статуси
+    window_size = Column(Integer, default=10)
+    forecast_horizon = Column(Integer, default=12)
     is_active = Column(Boolean, default=False)
 
 
@@ -56,11 +50,8 @@ class SystemSettings(Base):
     __tablename__ = "lpa_settings"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-
     is_collector_active = Column(Boolean, default=False)
-
     prometheus_url = Column(String, default="http://192.168.49.2:30090/api/v1/query")
-
     cpu_query = Column(
         String,
         default=(
@@ -76,7 +67,7 @@ class SystemSettings(Base):
     rps_query = Column(
         String, default='sum(rate(http_requests_total{pod=~"cpu-service-.*"}[30s]))'
     )
-    prediction_cpu_limit = Column(Float, default=1.0)
+    ood_blend_threshold = Column(Float, default=0.10)
 
 
 class RawCpuReading(Base):
@@ -90,14 +81,11 @@ class SystemLog(Base):
     __tablename__ = "lpa_logs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    # Індексуємо за часом, щоб швидко сортувати в дашборді
     ts = Column(
         DateTime(timezone=True),
         default=lambda: datetime.datetime.now(datetime.timezone.utc),
         index=True,
     )
-    level = Column(String(20), nullable=False)  # 'INFO', 'WARNING', 'ERROR'
-    service = Column(
-        String(50), nullable=False
-    )  # 'collector_worker', 'predictor', 'api'
+    level = Column(String(20), nullable=False)
+    service = Column(String(50), nullable=False)
     message = Column(String, nullable=False)

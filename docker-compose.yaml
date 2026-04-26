@@ -74,7 +74,7 @@ services:
     depends_on:
       timescale_api:
         condition: service_healthy
-      lstm-predictor:
+      predictor:
         condition: service_healthy
     volumes:
       - ./app:/app 
@@ -101,19 +101,19 @@ services:
     depends_on:
       timescale_api:
         condition: service_healthy
-      lstm-predictor:
+      predictor:
         condition: service_healthy
 
-  lstm-predictor:
+  predictor:
     build:
       context: ./app
     restart: always
-    container_name: lstm-predictor
+    container_name: predictor
     ports:
         - "6000:6000"
     networks:
       - internal-network
-    command: ["python", "-u", "lstm_module/main.py"]
+    command: ["python", "-u", "predictor/main.py"]
     environment:
       - PORT=6000
     volumes:

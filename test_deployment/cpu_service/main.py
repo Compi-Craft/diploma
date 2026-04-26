@@ -3,9 +3,18 @@ CPU-intensive test service for dataset generation.
 Exposes /compute endpoint that does bcrypt hashing with configurable rounds.
 bcrypt runs in a thread pool to avoid blocking the async event loop.
 Prometheus metrics: request count, request duration, in-flight requests.
+
+MAX_WORKERS controls the ThreadPoolExecutor size, which acts as a hard
+concurrency limit per pod. With bcrypt at ~400 ms/req:
+  saturation RPS per pod ≈ MAX_WORKERS / 0.4
+
+Default MAX_WORKERS=2 → saturation at ~5 RPS per pod, making the
+difference between 1 and 2 ready replicas clearly visible in tail latency.
+Set MAX_WORKERS=32 to disable the limit (original behaviour).
 """
 
 import asyncio
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -21,9 +30,11 @@ from pydantic import BaseModel, Field
 
 app = FastAPI(title="CPU Load Service")
 
-# Thread pool для CPU-bound bcrypt (не блокує event loop)
-# max_workers=32: при rounds=10 (~100ms/req) → ~320 RPS capacity
-_executor = ThreadPoolExecutor(max_workers=32)
+# Thread pool for CPU-bound bcrypt — size doubles as a concurrency limiter.
+# Requests beyond MAX_WORKERS queue in the asyncio executor queue, which
+# causes latency to grow linearly with queue depth (Little's Law).
+_MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "2"))
+_executor = ThreadPoolExecutor(max_workers=_MAX_WORKERS)
 
 # ── Prometheus metrics ──────────────────────────────────────────────
 REQUEST_COUNT = Counter(

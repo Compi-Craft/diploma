@@ -8,6 +8,6 @@ stringData:
     - job_name: 'lpa-collector'
       scrape_interval: 5s
       static_configs:
-        - targets: ['host.minikube.internal:8001']
+        - targets: ['192.168.49.1:8001']
           labels:
             service: 'lpa-collector'

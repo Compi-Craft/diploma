@@ -51,9 +51,11 @@ metadata:
   labels:
     app: cpu-service
 spec:
+  type: NodePort
   ports:
   - port: 8080
     targetPort: http
+    nodePort: 31413
     name: http
   selector:
     app: cpu-service

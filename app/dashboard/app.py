@@ -60,7 +60,6 @@ if page == "📈 Metrics":
     if auto_refresh_enabled:
         st_autorefresh(interval=refresh_interval * 1000, key="metrics_refresh")
 
-    # Один запит — всі метрики в одному рядку
     data = sync_http_request(
         "GET",
         f"{API_URL}/metrics/history",
@@ -74,8 +73,8 @@ if page == "📈 Metrics":
         df["ts"] = pd.to_datetime(df["ts"])
         df = df.sort_values("ts")
 
-        # ── CPU Chart (з прогнозом та actual) ──
-        st.subheader("CPU Usage (cores)")
+        # ── CPU Chart ──
+        st.subheader("CPU Utilization [0, 1]")
         fig_cpu = go.Figure()
         fig_cpu.add_trace(
             go.Scatter(
@@ -113,7 +112,7 @@ if page == "📈 Metrics":
             margin=dict(l=0, r=0, t=30, b=0),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
             xaxis_title="Time",
-            yaxis_title="CPU (cores)",
+            yaxis_title="CPU utilization [0, 1]",
             hovermode="x unified",
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)",
@@ -204,7 +203,15 @@ elif page == "🗂️ Model Registry":
             lambda x: "✅ Active" if x else "⬜ Inactive"
         )
 
-        display_cols = ["version", "status", "mse", "mae", "created_at"]
+        display_cols = [
+            "version",
+            "status",
+            "mse",
+            "mae",
+            "window_size",
+            "forecast_horizon",
+            "created_at",
+        ]
         st.dataframe(
             df[display_cols],
             use_container_width=True,
@@ -214,6 +221,8 @@ elif page == "🗂️ Model Registry":
                 "status": st.column_config.TextColumn("Status", width="small"),
                 "mse": st.column_config.TextColumn("MSE"),
                 "mae": st.column_config.TextColumn("MAE"),
+                "window_size": st.column_config.NumberColumn("Window"),
+                "forecast_horizon": st.column_config.NumberColumn("Horizon"),
                 "created_at": st.column_config.TextColumn("Created At"),
             },
         )
@@ -224,13 +233,15 @@ elif page == "🗂️ Model Registry":
         if active_models:
             active = active_models[0]
             st.subheader("🟢 Currently Active Model")
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("Version", active.version)
             col2.metric("MSE", f"{active.mse:.6f}" if active.mse is not None else "—")
             col3.metric("MAE", f"{active.mae:.6f}" if active.mae is not None else "—")
+            col4.metric("Window", active.window_size)
+            col5.metric("Horizon", active.forecast_horizon)
             with st.expander("File paths"):
                 st.code(
-                    f"Model:    {active.model_path}\nScaler X: {active.scaler_x_path}\nScaler y: {active.scaler_y_path}"
+                    f"Model:    {active.model_path}\nScaler X: {active.scaler_x_path}"
                 )
 
         st.divider()
@@ -249,7 +260,7 @@ elif page == "🗂️ Model Registry":
                 "Select version to activate or force-reload",
                 all_versions,
                 index=active_index,
-                help="Select any model to activate it. Selecting the currently active model will force the Predictor to reload its files.",
+                help="Selecting the currently active model forces the Predictor to reload its files.",
             )
 
             col1, col2 = st.columns(2)
@@ -282,18 +293,18 @@ elif page == "🗂️ Model Registry":
                         time.sleep(2)
                         st.rerun()
         else:
-            st.info("ℹ️ No models registered yet.")
+            st.info("No models registered yet.")
 
         st.divider()
         st.subheader("🛠️ Fine-Tune a Model")
-        st.markdown("Запусти фоновий процес донавчання моделі на історичних даних.")
+        st.markdown("Run background fine-tuning on historical data.")
 
         col_ft1, col_ft2 = st.columns(2)
         with col_ft1:
             tune_version = st.selectbox(
                 "Base Model Version",
                 all_versions,
-                help="Обери модель, ваги якої будуть використані як базові.",
+                help="Weights from this model are used as the starting point.",
             )
 
         with col_ft2:
@@ -403,7 +414,7 @@ elif page == "🗂️ Model Registry":
             )
             st.plotly_chart(fig_rps_ft, use_container_width=True)
         elif preview_data is not None:
-            st.info("ℹ️ Немає закритих прогнозів у вибраному діапазоні.")
+            st.info("No closed predictions in the selected range.")
 
         # ─────────────────────────────────────────────────────────────────────
         if st.button("🚀 Start Fine-Tuning", type="secondary"):
@@ -428,12 +439,13 @@ elif page == "🗂️ Model Registry":
                     )
                     if response:
                         st.success(
-                            "✅ Процес донавчання запущено у фоні! Нова модель з'явиться в таблиці після завершення (натисни Refresh за кілька хвилин)."
+                            "Fine-tuning started in the background. "
+                            "The new model will appear in the registry when done (refresh in a few minutes)."
                         )
                     else:
-                        st.error("❌ Помилка запуску fine-tuning")
+                        st.error("Failed to start fine-tuning.")
                 except requests.exceptions.RequestException as e:
-                    st.error(f"❌ Не вдалося з'єднатися з сервісом Предиктора: {e}")
+                    st.error(f"Could not reach the predictor service: {e}")
 
     elif models is not None:
         st.info("No models registered yet. Upload one using **Upload Model**.")
@@ -444,7 +456,7 @@ elif page == "🗂️ Model Registry":
 elif page == "📤 Upload Model":
     st.title("📤 Upload New Model")
     st.markdown(
-        "Upload a trained `.keras` GRU model and its **two** `.joblib` scikit-learn scalers. "
+        "Upload a trained `.keras` GRU model and its Scaler X `.joblib` file. "
         "Leave *Version* empty to auto-generate one."
     )
 
@@ -454,35 +466,47 @@ elif page == "📤 Upload Model":
         mse = col2.number_input("MSE", value=0.0, min_value=0.0, format="%.6f")
         mae = col3.number_input("MAE", value=0.0, min_value=0.0, format="%.6f")
 
+        col_ws, col_fh = st.columns(2)
+        with col_ws:
+            window_size = st.number_input(
+                "Window Size (steps)",
+                min_value=1,
+                max_value=50,
+                value=10,
+                step=1,
+                help="Number of historical time steps the model uses as input.",
+            )
+        with col_fh:
+            forecast_horizon = st.number_input(
+                "Forecast Horizon (steps)",
+                min_value=1,
+                max_value=60,
+                value=12,
+                step=1,
+                help="How many steps ahead the model predicts (12 steps × 5s = 60s).",
+            )
+
         model_file = st.file_uploader(
             "Model file (.keras)",
             type=["keras"],
             help="Keras model exported with model.save()",
         )
 
-        col_s1, col_s2 = st.columns(2)
-        with col_s1:
-            scaler_X_file = st.file_uploader(
-                "Scaler X (Features) (.joblib)",
-                type=["joblib", "pkl"],
-                help="Scaler for input features",
-            )
-        with col_s2:
-            scaler_y_file = st.file_uploader(
-                "Scaler y (Target) (.joblib)",
-                type=["joblib", "pkl"],
-                help="Scaler for target output",
-            )
+        scaler_X_file = st.file_uploader(
+            "Scaler X (Features) (.joblib)",
+            type=["joblib", "pkl"],
+            help="StandardScaler for input features",
+        )
 
         submitted = st.form_submit_button(
             "📤 Upload", type="primary", use_container_width=True
         )
 
     if submitted:
-        if not model_file or not scaler_X_file or not scaler_y_file:
-            st.error("All three files (model, scaler_X, scaler_y) are required.")
+        if not model_file or not scaler_X_file:
+            st.error("Both model file and Scaler X are required.")
         else:
-            with st.spinner("Uploading model and scalers..."):
+            with st.spinner("Uploading model and scaler..."):
                 files = {
                     "model_file": (
                         model_file.name,
@@ -494,13 +518,13 @@ elif page == "📤 Upload Model":
                         scaler_X_file.getvalue(),
                         "application/octet-stream",
                     ),
-                    "scaler_y_file": (
-                        scaler_y_file.name,
-                        scaler_y_file.getvalue(),
-                        "application/octet-stream",
-                    ),
                 }
-                form_data: dict[str, str] = {"mse": str(mse), "mae": str(mae)}
+                form_data: dict[str, str] = {
+                    "mse": str(mse),
+                    "mae": str(mae),
+                    "window_size": str(int(window_size)),
+                    "forecast_horizon": str(int(forecast_horizon)),
+                }
                 stripped_version = version.strip()
                 if stripped_version:
                     form_data["version"] = stripped_version
@@ -559,14 +583,19 @@ elif page == "⚙️ Settings":
                 height=90,
             )
 
-            st.subheader("Model Output")
-            prediction_cpu_limit = st.number_input(
-                "Prediction CPU Limit (cores)",
-                min_value=0.1,
-                max_value=64.0,
-                value=float(settings_data.prediction_cpu_limit),
-                step=0.1,
-                help="Hard cap on the exposed prediction value. Set to match limits.cpu × maxReplicas.",
+            st.subheader("OOD Blend")
+            ood_blend_threshold = st.number_input(
+                "OOD Blend Threshold [0, 1]",
+                min_value=0.0,
+                max_value=1.0,
+                value=float(settings_data.ood_blend_threshold),
+                step=0.01,
+                format="%.3f",
+                help=(
+                    "Below this CPU utilization the model is outside its training distribution. "
+                    "The exposed prediction is linearly blended toward actual_cpu to avoid "
+                    "idle over-provisioning."
+                ),
             )
 
             saved = st.form_submit_button(
@@ -580,7 +609,7 @@ elif page == "⚙️ Settings":
                 "cpu_query": cpu_query,
                 "ram_query": ram_query,
                 "rps_query": rps_query,
-                "prediction_cpu_limit": prediction_cpu_limit,
+                "ood_blend_threshold": ood_blend_threshold,
             }
             result = sync_http_request(
                 url=f"{API_URL}/settings",
@@ -589,7 +618,7 @@ elif page == "⚙️ Settings":
                 response_model=SettingsRead,
             )
             if result:
-                st.success("✅ Settings saved successfully!")
+                st.success("Settings saved.")
                 st.rerun()
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -691,7 +720,7 @@ elif page == "📝 Logs":
                     color = "#33d9b2"
                     lvl_pad = lvl + " "
 
-                log_html += f"<div style='margin-bottom: 4px; border-bottom: 1px solid #333; padding-bottom: 2px;'>"
+                log_html += "<div style='margin-bottom: 4px; border-bottom: 1px solid #333; padding-bottom: 2px;'>"
                 log_html += f"<span style='color: #7f8c8d;'>[{ts}]</span> "
                 log_html += f"<span style='color: {color}; font-weight: bold;'>[{lvl_pad}]</span> "
                 log_html += f"<span style='color: #34ace0;'>[{svc}]</span> "
@@ -701,9 +730,9 @@ elif page == "📝 Logs":
             log_html += "</div>"
             st.markdown(log_html, unsafe_allow_html=True)
         else:
-            st.info(f"ℹ️ Немає логів для сервісу '{selected_service}'.")
+            st.info(f"No logs for service '{selected_service}'.")
     else:
-        st.info("ℹ️ Системних логів поки немає.")
+        st.info("No system logs yet.")
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.sidebar.markdown("---")

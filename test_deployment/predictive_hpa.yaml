@@ -8,19 +8,21 @@ spec:
     name: cpu-service # Ім'я деплойменту
   minReplicaCount: 1
   maxReplicaCount: 15
-  pollingInterval: 15   # Опитувати метрики кожні 5 секунд (дефолт KEDA = 30s)
+  pollingInterval: 5   # Опитувати метрики кожні 5 секунд (дефолт KEDA = 30s)
   cooldownPeriod: 30  # Швидкий downscale після падіння навантаження
   advanced:
     restoreToOriginalReplicaCount: true
     horizontalPodAutoscalerConfig:
       behavior:
         scaleUp:
+          # No rate limit — mirrors vanilla_hpa_stress.yaml for a fair comparison.
+          selectPolicy: Max
           policies:
           - type: Pods
-            value: 2          # max 2 поди за раз
-            periodSeconds: 30 # не частіше ніж раз на 30 секунд
+            value: 15
+            periodSeconds: 15
         scaleDown:
-          stabilizationWindowSeconds: 30  # чекати 30s перед downscale (дефолт K8s = 300s)
+          stabilizationWindowSeconds: 30
   triggers:
 
   # ---------------------------------------------------------

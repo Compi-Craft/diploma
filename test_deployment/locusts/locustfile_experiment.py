@@ -21,12 +21,13 @@ import json
 import math
 import os
 import random
+import threading
 import time
 from pathlib import Path
 
 from locust import FastHttpUser, LoadTestShape, between, events, task
 
-COOLDOWN = 120
+COOLDOWN = 300
 SCRIPT_DIR = Path(__file__).parent
 TIMESTAMPS_FILE = SCRIPT_DIR / "experiment_timestamps.json"
 RESULTS_DIR = SCRIPT_DIR / "results"
@@ -65,19 +66,19 @@ class CpuServiceUser(FastHttpUser):
 
 def scenario_1_linear_ramp(t: float) -> tuple[int, int] | None:
     if t < 180:
-        return (max(1, int(1 + (t / 180) * 39)), 3)
+        return (max(1, int(1 + (t / 180) * 119)), 3)
     if t < 420:
-        return (40, 3)
+        return (120, 3)
     if t < 600:
-        return (max(1, int(40 - ((t - 420) / 180) * 39)), 3)
+        return (max(1, int(120 - ((t - 420) / 180) * 119)), 3)
     return None
 
 
 def scenario_2_step_function(t: float) -> tuple[int, int] | None:
-    steps = [(120, 1), (240, 34), (300, 7), (420, 40), (510, 14), (600, 1)]
+    steps = [(120, 3), (240, 100), (300, 20), (420, 120), (510, 40), (600, 3)]
     for end_time, users in steps:
         if t < end_time:
-            return (users, 40)
+            return (users, 120)
     return None
 
 
@@ -85,17 +86,17 @@ def scenario_3_sine_wave(t: float) -> tuple[int, int] | None:
     if t >= 720:
         return None
     wave = math.sin(t * 2 * math.pi / 180) ** 2
-    return (max(1, int(2 + wave * 38)), 7)
+    return (max(1, int(2 + wave * 118)), 15)
 
 
 _spike_ranges = [
-    (60, 80, 38),
-    (150, 170, 40),
-    (230, 250, 34),
-    (330, 355, 40),
-    (410, 425, 30),
-    (490, 515, 38),
-    (560, 580, 35),
+    (60, 80,  114),
+    (150, 170, 120),
+    (230, 250, 102),
+    (330, 355, 120),
+    (410, 425,  90),
+    (490, 515, 114),
+    (560, 580, 105),
 ]
 
 
@@ -104,12 +105,12 @@ def scenario_4_multi_spike(t: float) -> tuple[int, int] | None:
         return None
     for start, end, peak in _spike_ranges:
         if start <= t < end:
-            return (peak, 40)
-    return (3, 7)
+            return (peak, 120)
+    return (9, 15)
 
 
 _rng = random.Random(42)
-_rw_state = {"current": 14, "last_step": -1}
+_rw_state = {"current": 42, "last_step": -1}
 
 
 def scenario_5_random_walk(t: float) -> tuple[int, int] | None:
@@ -118,12 +119,12 @@ def scenario_5_random_walk(t: float) -> tuple[int, int] | None:
     step = int(t // 10)
     if step != _rw_state["last_step"]:
         _rw_state["last_step"] = step
-        delta = _rng.randint(-3, 4)
-        _rw_state["current"] = max(1, min(40, _rw_state["current"] + delta))
-    return (_rw_state["current"], 14)
+        delta = _rng.randint(-9, 12)
+        _rw_state["current"] = max(1, min(120, _rw_state["current"] + delta))
+    return (_rw_state["current"], 42)
 
 
-_burst_ranges = [(150, 180, 38), (300, 340, 40), (460, 485, 35)]
+_burst_ranges = [(150, 180, 114), (300, 340, 120), (460, 485, 105)]
 
 
 def scenario_6_quiet_burst(t: float) -> tuple[int, int] | None:
@@ -131,7 +132,7 @@ def scenario_6_quiet_burst(t: float) -> tuple[int, int] | None:
         return None
     for start, end, peak in _burst_ranges:
         if start <= t < end:
-            return (peak, 40)
+            return (peak, 120)
     return (1, 7)
 
 
@@ -166,6 +167,7 @@ class ExperimentShape(LoadTestShape):
 
         self._round = _round_label
         self._timestamps_saved = False
+        self._quitting = False
 
         # Зберігаємо timestamps при Ctrl+C / передчасному завершенні
         events.quitting.add_listener(self._on_quit)
@@ -178,6 +180,11 @@ class ExperimentShape(LoadTestShape):
 
         if t >= self.total_duration:
             self._save_timestamps()
+            if not self._quitting and self.runner is not None:
+                self._quitting = True
+                threading.Thread(
+                    target=self.runner.quit, daemon=True
+                ).start()
             return None
 
         for start, end, name, func in self.schedule:

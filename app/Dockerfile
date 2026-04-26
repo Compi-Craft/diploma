@@ -15,6 +15,6 @@ COPY . .
 # Змінні оточення
 ENV PYTHONPATH=/app
 ENV API_URL="http://timescale_api:5000"
-ENV PREDICTOR_URL="http://lstm-predictor:6000"
+ENV PREDICTOR_URL="http://predictor:6000"
 ENV MODELS_DIR="/app/ml_models"
 ENV SCALERS_DIR="/app/scalers"

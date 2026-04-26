@@ -31,13 +31,16 @@ class PredictionResponse(BaseModel):
 class StatusResponse(BaseModel):
     current_version: str
     status: str
+    window_size: int
+    forecast_horizon: int
 
 
 class ReloadRequest(BaseModel):
     version: str
     model_path: str
     scaler_x_path: str
-    scaler_y_path: str
+    window_size: int = 10
+    forecast_horizon: int = 12
 
 
 class RetrainCommand(BaseModel):
@@ -95,8 +98,9 @@ class ModelCreate(BaseModel):
     mae: Optional[float] = None
     model_path: str
     scaler_x_path: str
-    scaler_y_path: str
     is_active: bool = False
+    window_size: int = 10
+    forecast_horizon: int = 12
 
 
 class ModelRead(ModelCreate):
@@ -108,23 +112,23 @@ class ModelRead(ModelCreate):
 
 
 class ModelUploadRequest:
-    """Клас-залежність для парсингу multipart/form-data запитів із файлами."""
-
     def __init__(
         self,
         version: str = Form(...),
         mse: Optional[float] = Form(None),
         mae: Optional[float] = Form(None),
+        window_size: int = Form(10),
+        forecast_horizon: int = Form(12),
         model_file: UploadFile = File(...),
         scaler_x_file: UploadFile = File(...),
-        scaler_y_file: UploadFile = File(...),
     ):
         self.version = version
         self.mse = mse
         self.mae = mae
+        self.window_size = window_size
+        self.forecast_horizon = forecast_horizon
         self.model_file = model_file
         self.scaler_x_file = scaler_x_file
-        self.scaler_y_file = scaler_y_file
 
 
 class SettingsUpdate(BaseModel):
@@ -133,7 +137,7 @@ class SettingsUpdate(BaseModel):
     cpu_query: str
     ram_query: str
     rps_query: str
-    prediction_cpu_limit: float = 1.0
+    ood_blend_threshold: float = 0.10
 
 
 class SettingsRead(SettingsUpdate):

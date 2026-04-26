@@ -1,5 +1,5 @@
 {
-  "window_size": 8,
+  "window_size": 10,
   "forecast_horizon": 12,
   "features": [
     "cpu",
