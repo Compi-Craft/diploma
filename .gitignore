@@ -50,7 +50,6 @@ coverage.xml
 .pytest_cache/
 cover/
 thesis/
-*data*
 *.zip
 # Translations
 *.mo
