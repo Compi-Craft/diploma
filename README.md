@@ -4,6 +4,12 @@ Predictive autoscaler for Kubernetes. A GRU neural network forecasts CPU utiliza
 
 ---
 
+## System Architecture
+
+![System Architecture](notebooks/figures/system_architecture.svg)
+
+---
+
 ## How It Works
 
 ```
@@ -25,7 +31,7 @@ Prometheus (K8s)
   (proactive trigger)     (reactive fallback)
 ```
 
-**Key idea:** With a 60s prediction horizon and a 15s pod startup time, the new pod is *ready* when the spike actually hits.
+**Key idea:** With a 60s prediction horizon and a ~15s pod startup time, the new pod is *ready* when the spike actually hits.
 
 ---
 
@@ -111,7 +117,8 @@ The collector starts gathering metrics within 5 seconds. Predictions begin after
 ### Training workflow
 
 ```
-1. Run Locust against cpu-service with 1 fixed replica, NO HPA (locusts/locustfile_training.py)
+1. Run Locust against cpu-service with 1 fixed replica, NO HPA
+   (test_deployment/locusts/locustfile_training.py)
    → collect clean RPS→CPU data via Collector → export from DB
 2. Train in notebooks/final_model_training.ipynb
    → produces: model.keras + scaler_X.joblib (no scaler_y needed)
@@ -130,7 +137,7 @@ triggers:
   - type: prometheus          # PROACTIVE — ML prediction
     metricType: AverageValue
     query: max(gru_predicted_cpu_util) * 100 * scalar(kube_deployment_status_replicas_ready{...})
-    threshold: '50'           # stable when prediction < 50%
+    threshold: '50'           # scale when prediction exceeds 50% CPU
 
   - type: cpu                 # REACTIVE — fallback (vanilla HPA behaviour)
     metricType: AverageValue
@@ -155,7 +162,7 @@ The dual-trigger design ensures the system **cannot perform worse than vanilla H
 | `POST` | `/models` | Register a new model |
 | `GET` | `/models/active` | Get currently active model (used by predictor on cold start) |
 | `PUT` | `/models/{version}/activate` | Activate + trigger hot-swap |
-| `POST` | `/models/upload` | Upload `.keras` + 2 × `.joblib` scalers (multipart) |
+| `POST` | `/models/upload` | Upload `.keras` + `.joblib` scaler (multipart) |
 | `POST` | `/models/{version}/evaluate` | Calculate real MSE/MAE from DB |
 | `GET` | `/settings` | Fetch system settings |
 | `PUT` | `/settings` | Update Prometheus URL, PromQL queries, collector toggle |
@@ -188,36 +195,99 @@ All variables are defined in [app/config.py](app/config.py) and can be overridde
 
 ---
 
+## Notebooks
+
+| Notebook | Description |
+|----------|-------------|
+| [eda_final.ipynb](notebooks/eda_final.ipynb) | Exploratory data analysis: ACF/PACF, cross-correlation between RPS and CPU, feature correlation, ADF stationarity tests. Produces figures for Chapter 4 of the thesis. |
+| [hyperparam_search.ipynb](notebooks/hyperparam_search.ipynb) | Walk-forward cross-validation over window size, forecast horizon, and feature set combinations. Selects w=10, H=12, 4-feature configuration by CV loss. Produces the hyperparameter search heatmap. |
+| [final_model_training.ipynb](notebooks/final_model_training.ipynb) | Trains the production GRU model on the full training set. Exports `model.keras` and `scaler_X.joblib`. Produces learning curves and inference simulation figures. |
+| [export_prometheus_to_csv.ipynb](notebooks/export_prometheus_to_csv.ipynb) | Exports raw Prometheus time-series (CPU util, GRU prediction, replica count) from the TSDB backup to per-scenario CSV files in `notebooks/prometheus_export/`. Run this before the experiment analysis notebooks. |
+| [experiment_results_single_run.ipynb](notebooks/experiment_results_single_run.ipynb) | Analyses one A/B run (mw2_3): per-scenario replica/CPU timelines, scale-up lag, latency boxplots, overprovisioning. Produces `final_*.png` figures used in Chapter 5. |
+| [experiment_statistical.ipynb](notebooks/experiment_statistical.ipynb) | Aggregates all three A/B runs (mw2_2, mw2_3, mw2_4). Runs Wilcoxon signed-rank tests on 18 paired observations. Produces `stat_*.png` figures and the final statistical tables. |
+
+---
+
+## Datasets
+
+Located in [notebooks/raw_data/](notebooks/raw_data/). Both files are TimescaleDB exports from the Collector, recorded with one fixed replica and no HPA active (clean RPS→CPU signal).
+
+| File | Rows | Size | Role |
+|------|------|------|------|
+| `data-1774627968260.csv` | 2022 | 354 KB | **Training set** (larger) |
+| `data-1774610506409.csv` | 553 | 93 KB | **Validation set** (smaller) |
+
+Columns: `ts` (timestamp), `input_cpu` (raw CPU cores), `input_rps` (requests/s).  
+CPU is normalised to utilization ∈ [0, 1] by dividing by `CPU_LIMIT = 2.0` during loading.
+
+The experiment data (Locust CSVs and Prometheus per-scenario exports) is in [test_deployment/locusts/results/](test_deployment/locusts/results/) and [notebooks/prometheus_export/](notebooks/prometheus_export/).
+
+---
+
 ## Load Testing & A/B Experiment
 
-Located in [test_deployment/locusts/](test_deployment/locusts/):
+### Target service
+
+[test_deployment/cpu_service/](test_deployment/cpu_service/) — FastAPI service that runs bcrypt hashing in a `ThreadPoolExecutor`.  
+`MAX_WORKERS=2` creates a hard concurrency limit per pod: saturation at ~5 RPS/pod makes the difference between 1 and 2 ready replicas clearly visible in tail latency.
+
+### Kubernetes manifests
 
 | File | Description |
 |------|-------------|
-| `locustfile_training.py` | Single-replica data collection run (no HPA) — for model training |
-| `locustfile_scenarios.py` | All 6 scenarios in sequence — used for A/B experiment |
-| `locustfile_experiment.py` | Automated A/B runner with round tagging and timestamps |
+| [cpu-service.yaml](test_deployment/cpu-service.yaml) | K8s Deployment + Service for the target workload |
+| [predictive_hpa.yaml](test_deployment/predictive_hpa.yaml) | KEDA ScaledObject — dual trigger (GRU prediction + CPU fallback); Round B |
+| [vanilla_hpa.yaml](test_deployment/vanilla_hpa.yaml) | Standard HPA — reactive CPU baseline; Round A |
+| [prometheus-collector-scrape.yaml](test_deployment/prometheus-collector-scrape.yaml) | Prometheus ServiceMonitor to scrape the Collector's `/metrics` endpoint |
 
-### A/B comparison (Vanilla HPA vs Predictive KEDA)
+### Port-forward helpers
+
+[test_deployment/forwards/](test_deployment/forwards/) — one-liner scripts to expose cluster services locally during experiments:
+
+| Script | What it forwards |
+|--------|-----------------|
+| `forward_cpu_service.sh` | cpu-service → `localhost:8080` |
+| `forward_prometheus.sh` | cluster Prometheus → `localhost:9090` |
+| `forward_deployment.sh` | LPA stack ports |
+
+### Locust load test files
+
+| File | Description |
+|------|-------------|
+| [locustfile_training.py](test_deployment/locusts/locustfile_training.py) | 3 repeats × 5 scenarios in shuffled order (seed 99). Runs without HPA to collect clean training data. Total ~142 min. |
+| [locustfile_scenarios.py](test_deployment/locusts/locustfile_scenarios.py) | 6 scenarios in fixed order with 2-min cooldowns. Used for manual single-round runs. Total ~72 min. |
+| [locustfile_experiment.py](test_deployment/locusts/locustfile_experiment.py) | Same 6-scenario shape as above. Records exact Unix timestamps for each scenario boundary into `experiment_timestamps.json`. Run once per A/B round with `EXPERIMENT_ROUND=round_a` or `round_b`. |
+| `experiment_timestamps.json` | Recorded scenario start/end times; used by `export_prometheus_to_csv.ipynb` for Prometheus range queries. |
+| `results/` | Locust CSV output from all three A/B runs: `round_{a,b}_mw2_{2,3,4}_{stats,stats_history,failures,exceptions}.csv` |
+
+### Running an A/B experiment
 
 ```bash
 # Round A — Vanilla HPA (reactive baseline)
 kubectl delete scaledobject --all
 kubectl apply -f test_deployment/vanilla_hpa.yaml
-locust -f locusts/locustfile_scenarios.py --headless -u 30 -r 5 --run-time 40m
+EXPERIMENT_ROUND=round_a locust -f test_deployment/locusts/locustfile_experiment.py \
+    --host http://localhost:8080 --headless -u 120 -r 5 \
+    --csv test_deployment/locusts/results/round_a_mw2_N
 
 # Round B — Predictive KEDA
 kubectl delete hpa --all
 kubectl apply -f test_deployment/predictive_hpa.yaml
-locust -f locusts/locustfile_scenarios.py --headless -u 30 -r 5 --run-time 40m
-
-# Or use the automated A/B runner
-locust -f locusts/locustfile_experiment.py --headless -u 30 -r 5
+EXPERIMENT_ROUND=round_b locust -f test_deployment/locusts/locustfile_experiment.py \
+    --host http://localhost:8080 --headless -u 120 -r 5 \
+    --csv test_deployment/locusts/results/round_b_mw2_N
 ```
 
-Key metrics to compare: P99 latency during spike onset, scale-up lag, CPU throttling duration, wasted pod-seconds.
+After both rounds: run `export_prometheus_to_csv.ipynb`, then `experiment_results_single_run.ipynb` for per-scenario analysis, then `experiment_statistical.ipynb` for cross-run Wilcoxon tests.
 
-**Note:** `cpu-service.yaml` uses `initialDelaySeconds: 15` to simulate a slow-starting application (e.g. Spring Boot). This makes the 30s prediction horizon meaningful — the pod is ready exactly when the spike arrives.
+---
+
+## Scripts
+
+| Script | Description |
+|--------|-------------|
+| [scripts/start.sh](scripts/start.sh) | Starts the LPA Docker Compose stack and sets up port-forwards |
+| [scripts/end.sh](scripts/end.sh) | Tears down the stack and cleans up port-forwards |
 
 ---
 
@@ -232,9 +302,8 @@ diploma/
 │   │       ├── routes/             # metrics.py, model.py, settings.py, logs.py
 │   │       ├── models.py           # ORM: MetricEntry, ModelRegistry, SystemSettings, SystemLog
 │   │       └── database.py
-│   ├── predictor/                # GRU Predictor microservice (FastAPI, port 6000)
+│   ├── predictor/                  # GRU Predictor microservice (FastAPI, port 6000)
 │   │   ├── api/routes.py           # /predict, /reload, /retrain, /status
-│   │   ├── core/config.py          # PROJECT_NAME only
 │   │   └── services/
 │   │       ├── model_manager.py    # Thread-safe predict + hot-swap + fine-tune
 │   │       └── utils.py            # Fine-tune pipeline, data preparation
@@ -253,17 +322,35 @@ diploma/
 │   ├── scalers/                    # .joblib scaler files
 │   └── Dockerfile
 ├── notebooks/
-│   ├── final_model_training.ipynb          # Main training notebook (current production model)
-│   ├── hyperparam_search.ipynb             # Walk-forward CV: window/horizon/feature search
-│   ├── eda_final.ipynb                     # EDA of collected dataset
-│   ├── experiment_results_single_run.ipynb # A/B experiment analysis (single run)
-│   └── experiment_statistical.ipynb        # 3-run Wilcoxon statistical tests
+│   ├── raw_data/                   # TimescaleDB exports: train (2022 rows) + val (553 rows)
+│   ├── prometheus_export/          # Per-scenario Prometheus CSVs (cpu_util, gru_pred, replicas)
+│   ├── figures/                    # All generated plots
+│   ├── model_config.json           # Active model hyperparameters
+│   ├── eda_final.ipynb             # Dataset EDA (ACF/PACF, cross-correlation, stationarity)
+│   ├── hyperparam_search.ipynb     # Walk-forward CV: window/horizon/feature search
+│   ├── final_model_training.ipynb  # Production model training → model.keras + scaler_X.joblib
+│   ├── export_prometheus_to_csv.ipynb   # Export Prometheus TSDB → per-scenario CSVs
+│   ├── experiment_results_single_run.ipynb  # Single A/B run analysis (final_*.png)
+│   └── experiment_statistical.ipynb         # 3-run Wilcoxon tests (stat_*.png)
 ├── test_deployment/
-│   ├── cpu-service.yaml            # Target deployment (bcrypt CPU load, startup 15s)
-│   ├── predictive_hpa.yaml         # KEDA ScaledObject (ML + CPU dual trigger)
-│   ├── vanilla_hpa.yaml            # Standard HPA for A/B baseline
-│   ├── podinfo.yaml                # Alternative target deployment
-│   └── locusts/                    # 6 Locust scenarios + runner
+│   ├── cpu_service/                # Target workload source (FastAPI + bcrypt + ThreadPoolExecutor)
+│   │   ├── main.py                 # /compute endpoint, MAX_WORKERS=2 concurrency limit
+│   │   ├── Dockerfile
+│   │   └── redeploy.sh             # Rebuild & push to Minikube image registry
+│   ├── cpu-service.yaml            # K8s Deployment + Service for cpu-service
+│   ├── predictive_hpa.yaml         # KEDA ScaledObject (GRU + CPU dual trigger) — Round B
+│   ├── vanilla_hpa.yaml            # Standard HPA baseline — Round A
+│   ├── prometheus-collector-scrape.yaml  # ServiceMonitor for Collector metrics
+│   ├── forwards/                   # Port-forward helper scripts
+│   └── locusts/                    # Locust load test scripts + results
+│       ├── locustfile_training.py  # Training data collection (no HPA)
+│       ├── locustfile_scenarios.py # 6 scenarios, manual run
+│       ├── locustfile_experiment.py # A/B runner with timestamp logging
+│       ├── experiment_timestamps.json
+│       └── results/                # Locust CSV output (3 runs × 2 rounds)
+├── scripts/
+│   ├── start.sh                    # Start LPA stack + port-forwards
+│   └── end.sh                      # Teardown
 ├── configs/                        # Loki, Promtail, Grafana provisioning
 ├── docker-compose.yaml
 └── pyproject.toml                  # Black, isort, mypy config
