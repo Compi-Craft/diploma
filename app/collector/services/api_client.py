@@ -2,6 +2,7 @@ import datetime
 import time
 from typing import Dict, List
 
+import httpx
 from config import API_URL, MODEL_INPUT_STEPS, PREDICTOR_URL
 from shared.logger import send_system_log
 from shared.schemas import (
@@ -77,7 +78,7 @@ async def save_new_prediction(
 _settings_cache: SettingsRead | None = None
 _settings_cache_ts: float = 0.0
 # 30s TTL: trades toggle immediacy for ~17k fewer daily API requests
-_SETTINGS_TTL = 30.0
+_SETTINGS_TTL = 3
 
 
 async def get_system_settings() -> SettingsRead:
@@ -156,14 +157,29 @@ async def get_prediction(history: list[dict[str, float]]) -> float | None:
     Send a window of measurements to the predictor service.
     Returns predicted CPU (float) or None on error.
     """
+    global _predictor_status_cache, _predictor_status_cache_ts
+
     history_points = [MetricPoint.model_validate(point) for point in history]
 
-    response = await async_http_request(
-        method="POST",
-        url=f"{PREDICTOR_URL}/predict",
-        payload=PredictionRequest(history=history_points),
-        response_model=PredictionResponse,
-    )
+    try:
+        response = await async_http_request(
+            method="POST",
+            url=f"{PREDICTOR_URL}/predict",
+            payload=PredictionRequest(history=history_points),
+            response_model=PredictionResponse,
+        )
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 400:
+            # Window size mismatch after hot-swap — invalidate cache so next tick
+            # fetches the updated window_size from /status immediately.
+            _predictor_status_cache = None
+            _predictor_status_cache_ts = 0.0
+        await send_system_log(
+            f"Predictor returned {e.response.status_code}: {e.response.text}",
+            level="ERROR",
+            service="collector",
+        )
+        return None
 
     if response:
         return response.predicted_cpu
